@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SMT · Dashboard</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root{
+    --bg:var(--tg-theme-bg-color,#fff);
+    --bg2:var(--tg-theme-secondary-bg-color,#f2f3f5);
+    --fg:var(--tg-theme-text-color,#111);
+    --hint:var(--tg-theme-hint-color,#7a7f87);
+    --line:color-mix(in srgb,var(--fg) 12%,transparent);
+    --ok:#1f8a4c;      /* ishlagan — solder-mask yashil */
+    --abs:#c9302c;     /* прогул */
+    --vac:#2d6cdf;     /* ta'til */
+    --sick:#b8860b;    /* kasallik */
+    --half:#5aa86f;
+    --un:color-mix(in srgb,var(--fg) 18%,transparent);
+    --r:10px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 -apple-system,system-ui,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%}
+  body{padding:0 14px calc(24px + env(safe-area-inset-bottom))}
+  h1{font-size:19px;font-weight:600;margin:14px 0 2px;letter-spacing:-.01em}
+  .sub{color:var(--hint);font-size:13px;margin:0 0 12px}
+  .seg{display:grid;grid-template-columns:repeat(3,1fr);background:var(--bg2);border-radius:var(--r);padding:3px;margin-bottom:14px}
+  .seg button{border:0;background:transparent;color:var(--hint);font:inherit;font-weight:500;padding:8px 0;border-radius:8px}
+  .seg button.on{background:var(--bg);color:var(--fg);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+  .nav{display:flex;align-items:center;justify-content:space-between;margin:2px 0 12px}
+  .nav b{font-size:17px;font-weight:600}
+  .nav button{border:1px solid var(--line);background:var(--bg);color:var(--fg);width:40px;height:34px;border-radius:8px;font-size:18px}
+  .nav button:disabled{opacity:.3}
+  .bar{display:flex;height:14px;border-radius:7px;overflow:hidden;background:var(--un)}
+  .bar i{display:block;height:100%}
+  .bar .w{background:var(--ok)} .bar .a{background:var(--abs)} .bar .u{background:transparent}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:13px;color:var(--hint);margin:8px 0 16px}
+  .legend b{color:var(--fg);font-weight:600}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:-1px}
+  .sec{border-top:1px solid var(--line)}
+  .row{display:flex;align-items:center;gap:10px;padding:10px 0;cursor:pointer}
+  .row .nm{flex:1;min-width:0;font-weight:500}
+  .row .ct{font-variant-numeric:tabular-nums;color:var(--hint);font-size:14px;min-width:46px;text-align:right}
+  .row .ct b{color:var(--fg)}
+  .row .mini{width:64px}
+  .row .mini .bar{height:8px;border-radius:4px}
+  .people{padding:0 0 10px 14px;display:none}
+  .sec.open .people{display:block}
+  .people div{padding:4px 0;font-size:14px;display:flex;justify-content:space-between;gap:8px}
+  .chip{font-size:12px;padding:1px 8px;border-radius:10px;color:#fff;white-space:nowrap}
+  .k-a{background:var(--abs)} .k-v{background:var(--vac)} .k-s{background:var(--sick)} .k-b{background:#6b4f9e} .k-h{background:var(--half)} .k-x{background:var(--hint)}
+  table{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums}
+  th{color:var(--hint);font-weight:500;text-align:right;padding:6px 6px;border-bottom:1px solid var(--line);font-size:12px;white-space:nowrap}
+  td{padding:8px 6px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
+  th:first-child,td:first-child{text-align:left;white-space:normal;padding-left:0}
+  .tw{overflow-x:auto;margin:0 -14px;padding:0 14px}
+  .top li{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+  .top ol{margin:0;padding:0;list-style:none;counter-reset:n}
+  .top li::before{counter-increment:n;content:counter(n);width:22px;color:var(--hint);font-variant-numeric:tabular-nums}
+  .top .nm{flex:1;min-width:0}.top .nm small{display:block;color:var(--hint);font-size:12px}
+  .top .n{font-weight:600;color:var(--abs);min-width:52px;text-align:right}
+  input.q{width:100%;font:inherit;padding:10px 12px;border:1px solid var(--line);border-radius:var(--r);background:var(--bg2);color:var(--fg);outline:none}
+  input.q:focus{border-color:var(--ok)}
+  .res div{padding:10px 0;border-bottom:1px solid var(--line);cursor:pointer}
+  .res small{display:block;color:var(--hint);font-size:12px}
+  .emp{display:flex;align-items:center;gap:10px;margin:4px 0 12px}
+  .emp button{border:0;background:var(--bg2);color:var(--fg);font:inherit;padding:6px 10px;border-radius:8px}
+  .emp b{flex:1;min-width:0;font-weight:600}
+  .sub2{display:flex;gap:8px;margin-bottom:12px}
+  .sub2 button{border:1px solid var(--line);background:var(--bg);color:var(--hint);font:inherit;padding:6px 12px;border-radius:16px}
+  .sub2 button.on{border-color:var(--ok);color:var(--ok);font-weight:600}
+  .cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin:8px 0 12px}
+  .cal div{aspect-ratio:1;border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:12px;background:var(--bg2);color:var(--hint)}
+  .cal div.w{background:var(--ok);color:#fff}.cal div.h{background:var(--half);color:#fff}.cal div.a{background:var(--abs);color:#fff}.cal div.v{background:var(--vac);color:#fff}.cal div.s{background:var(--sick);color:#fff}.cal div.b{background:#6b4f9e;color:#fff}.cal div.x{background:var(--hint);color:#fff}
+  .cal div small{font-size:9px;opacity:.85}
+  .stat{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:0 0 12px}
+  .stat div{background:var(--bg2);border-radius:var(--r);padding:8px 10px}
+  .stat b{display:block;font-size:20px;font-weight:600;letter-spacing:-.02em}
+  .stat span{font-size:12px;color:var(--hint)}
+  .msg{padding:28px 0;text-align:center;color:var(--hint)}
+  .msg.err{color:var(--abs)}
+  .rt{border:1px solid var(--line);background:var(--bg2);color:var(--fg);font:inherit;padding:8px 18px;border-radius:8px}
+  select{font:inherit;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)}
+  .ld{opacity:.45;pointer-events:none}
+  @media (prefers-reduced-motion:no-preference){.seg button,.sub2 button{transition:background .15s,color .15s}}
+</style>
+</head>
+<body>
+<h1 id="ttl">SMT</h1>
+<p class="sub" id="sub">…</p>
+<div class="seg" id="seg">
+  <button data-v="day" class="on"></button><button data-v="mon"></button><button data-v="emp"></button>
+</div>
+<div id="view"></div>
+
+<script>
+// ====== SOZLAMA: Apps Script web app URL (Script properties'dagi WEBAPP_URL bilan bir xil) ======
+const API_URL = 'https://script.google.com/macros/s/AKfycbwDoGkQgMFBR5YNmnUppao5o-l5-Qx0xXadz0vrBeXOsUltXAijJ4ApOFzvH2GumSAZAg/exec';
+
+const I18N = {
+  uz: { day:'Bugun', mon:'Oy', emp:'Xodim', today:'Bugun', total:'Jami', present:'kelgan', absent:'kelmagan', unmarked:'belgilanmagan',
+    notFilled:"Bu kun uchun табель hali to'ldirilmagan.", loading:'Yuklanmoqda…', auth:'Kirish tekshiruvi o\'tmadi. Dashboard\'ni bot orqali oching.',
+    forbidden:'Bu bo\'lim faqat rahbarlar uchun.', server:'Server xatosi. Keyinroq urinib ko\'ring.', net:'Ulanish yo\'q. Internetni tekshiring.', unstable:'Server javob bermadi. Bir necha soniyadan keyin qayta urinib ko\'ring.', retry:'Qayta urinish',
+    k:{a:'прогул',v:"ta'til",s:'kasal',b:'Бс',h:'yarim kun',x:'?'}, emps:'Xodimlar', workdays:'ish-kun', abs:'прогул', vac:"ta'til", sick:'kasallik',
+    top:"TOP-10 eng ko'p kelmaganlar", noabs:'Прогул yo\'q 👍', dept:'Bo\'lim', people:'xodim', days:'kun', search:'Familiya yoki ism…', noRes:'Topilmadi',
+    salary:'Oylik', tabel:'Davomat', back:'‹', noData:"Ma'lumot yo'q", notInTabel:'Табельда topilmadi', worked:'Ishlangan', extra:'Qo\'sh. soat', month:'Oy',
+    months:['Yanvar','Fevral','Mart','Aprel','May','Iyun','Iyul','Avgust','Sentabr','Oktabr','Noyabr','Dekabr'], sum:"so'm" },
+  ru: { day:'Сегодня', mon:'Месяц', emp:'Сотрудник', today:'Сегодня', total:'Итого', present:'присутствуют', absent:'отсутствуют', unmarked:'не отмечено',
+    notFilled:'Табель за этот день ещё не заполнен.', loading:'Загрузка…', auth:'Проверка входа не пройдена. Откройте дашборд через бота.',
+    forbidden:'Раздел только для руководителей.', server:'Ошибка сервера. Попробуйте позже.', net:'Нет соединения. Проверьте интернет.', unstable:'Сервер не ответил. Попробуйте через несколько секунд.', retry:'Повторить',
+    k:{a:'прогул',v:'отпуск',s:'больн.',b:'Бс',h:'полдня',x:'?'}, emps:'Сотрудники', workdays:'отраб. дней', abs:'прогулы', vac:'отпуск', sick:'больн.',
+    top:'TOP-10 по прогулам', noabs:'Прогулов нет 👍', dept:'Отдел', people:'сотр.', days:'дн.', search:'Фамилия или имя…', noRes:'Не найдено',
+    salary:'Зарплата', tabel:'Табель', back:'‹', noData:'Нет данных', notInTabel:'Не найден в табеле', worked:'Отработано', extra:'Доп. часы', month:'Месяц',
+    months:['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'], sum:'сум' }
+};
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+const initData = tg ? tg.initData : '';
+let T = I18N.uz, S = { view:'day', daysAgo:0, monthsAgo:0, init:null, emp:null, empTab:'salary', midx:null, cache:{} };
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = (n, d=0) => { const x = Number(n)||0; const p = Math.abs(x).toFixed(d).split('.'); p[0]=p[0].replace(/\B(?=(\d{3})+(?!\d))/g,' '); return (x<0?'-':'')+(d?p.join(','):p[0]); };
+const dd = n => (n<10?'0':'')+n;
+
+async function api(body, attempt = 0) {
+  const key = JSON.stringify(body);
+  if (S.cache[key]) return S.cache[key];
+  let r, j;
+  try {
+    const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 25000);
+    r = await fetch(API_URL, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(Object.assign({ initData }, body)), redirect:'follow', signal: ctl.signal });
+    clearTimeout(tm);
+    j = await r.json(); // Google vaqtincha HTML qaytarsa — bu yerda xato
+  } catch (e) {
+    if (attempt < 2) { await new Promise(res => setTimeout(res, 1200 * (attempt + 1))); return api(body, attempt + 1); }
+    throw new Error(navigator.onLine === false ? 'net' : 'unstable');
+  }
+  if (!j.ok) {
+    if (j.error === 'server' && attempt < 1) { await new Promise(res => setTimeout(res, 1500)); return api(body, attempt + 1); }
+    throw new Error(j.error || 'server');
+  }
+  if (body.api !== 'search') S.cache[key] = j;
+  return j;
+}
+function showMsg(html, err, retry) {
+  $('#view').innerHTML = `<div class="msg${err?' err':''}">${html}${retry?`<div style="margin-top:14px"><button class="rt">${T.retry}</button></div>`:''}</div>`;
+  if (retry) $('#view .rt').onclick = retry;
+}
+function errBox(e, retry) { return `<div class="msg err">${errText(e)}<div style="margin-top:14px"><button class="rt" onclick="(${retry})()">${T.retry}</button></div></div>`; }
+function errText(e) { return T[e.message] || T.server; }
+
+async function boot() {
+  try {
+    const j = await api({ api:'init' });
+    S.init = j; T = I18N[j.lang] || I18N.uz;
+    document.documentElement.lang = j.lang;
+    $('#sub').textContent = `${j.name} · ${dd(j.today[2])}.${dd(j.today[1]+1)}.${j.today[0]}`;
+    $('#seg').querySelectorAll('button').forEach(b => b.textContent = T[b.dataset.v]);
+    S.midx = j.tabelMonths[0] ?? j.today[1];
+    render();
+  } catch (e) { showMsg(errText(e), true, boot); }
+}
+$('#seg').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  S.view = b.dataset.v; $('#seg').querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); render();
+});
+function render() { ({ day: renderDay, mon: renderMon, emp: renderEmp })[S.view](); }
+
+// ---------- Bugun ----------
+async function renderDay() {
+  const v = $('#view'); v.innerHTML = `<div class="msg">${T.loading}</div>`;
+  let d; try { d = (await api({ api:'daily', daysAgo:S.daysAgo })).data; } catch (e) { return showMsg(errText(e), true, renderDay); }
+  const date = `${dd(d.date[2])}.${dd(d.date[1]+1)}.${d.date[0]}`;
+  let h = `<div class="nav"><button id="pv">‹</button><b>${S.daysAgo===0?T.today+', ':''}${date}</b><button id="nx" ${S.daysAgo===0?'disabled':''}>›</button></div>`;
+  if (!d.filled) h += `<div class="msg">${T.notFilled}</div>`;
+  else {
+    const t = d.total, pct = x => t.n ? (100*x/t.n) : 0;
+    h += `<div class="bar"><i class="w" style="width:${pct(t.w)}%"></i><i class="a" style="width:${pct(t.a)}%"></i></div>
+      <div class="legend"><span><i class="dot" style="background:var(--ok)"></i>${T.present} <b>${t.w}</b></span><span><i class="dot" style="background:var(--abs)"></i>${T.absent} <b>${t.a}</b></span>${t.u?`<span><i class="dot" style="background:var(--un)"></i>${T.unmarked} <b>${t.u}</b></span>`:''}<span>${T.total} <b>${t.n}</b></span></div>`;
+    d.sections.forEach((s, i) => {
+      const p = x => s.n ? (100*x/s.n) : 0;
+      h += `<div class="sec${s.people.length?' has':''}" data-i="${i}"><div class="row"><span class="nm">${esc(s.name)}</span><span class="mini"><span class="bar"><i class="w" style="width:${p(s.w)}%"></i><i class="a" style="width:${p(s.a)}%"></i></span></span><span class="ct"><b>${s.w}</b>/${s.n}</span></div>`;
+      if (s.people.length) h += `<div class="people">${s.people.map(x => `<div><span>${esc(x.fio)}</span><span class="chip k-${x.k}">${T.k[x.k]||esc(x.raw)}</span></div>`).join('')}</div>`;
+      h += `</div>`;
+    });
+  }
+  v.innerHTML = h;
+  $('#pv').onclick = () => { S.daysAgo++; renderDay(); };
+  $('#nx').onclick = () => { S.daysAgo--; renderDay(); };
+  v.querySelectorAll('.sec.has .row').forEach(r => r.onclick = () => r.parentElement.classList.toggle('open'));
+}
+
+// ---------- Oy ----------
+async function renderMon() {
+  const v = $('#view'); v.innerHTML = `<div class="msg">${T.loading}</div>`;
+  let d; try { d = (await api({ api:'monthly', monthsAgo:S.monthsAgo })).data; } catch (e) { return showMsg(errText(e), true, renderMon); }
+  let h = `<div class="nav"><button id="pv">‹</button><b>${T.months[d.month[1]]} ${d.month[0]}</b><button id="nx" ${S.monthsAgo===0?'disabled':''}>›</button></div>`;
+  if (!d.filled) h += `<div class="msg">${T.notFilled}</div>`;
+  else {
+    const t = d.total;
+    h += `<div class="stat"><div><b>${t.n}</b><span>${T.emps}</span></div><div><b>${fmt(t.w)}</b><span>${T.workdays}</span></div><div><b style="color:var(--abs)">${t.a}</b><span>${T.abs}</span></div></div>
+      <div class="tw"><table><tr><th>${T.dept}</th><th>${T.people}</th><th>${T.workdays}</th><th>${T.abs}</th><th>${T.vac}</th><th>${T.sick}</th></tr>
+      ${d.sections.map(s => `<tr><td>${esc(s.name)}</td><td>${s.n}</td><td>${fmt(s.w)}</td><td style="color:${s.a?'var(--abs)':'inherit'}">${s.a||'–'}</td><td>${s.v||'–'}</td><td>${s.s||'–'}</td></tr>`).join('')}</table></div>
+      <h1 style="font-size:16px;margin-top:20px">${T.top}</h1>`;
+    h += d.top.length ? `<div class="top"><ol>${d.top.map(e => `<li><span class="nm">${esc(e.fio)}<small>${esc(e.sec)}</small></span><span class="n">${e.a} ${T.days}</span></li>`).join('')}</ol></div>` : `<p class="sub">${T.noabs}</p>`;
+  }
+  v.innerHTML = h;
+  $('#pv').onclick = () => { S.monthsAgo++; renderMon(); };
+  $('#nx').onclick = () => { S.monthsAgo--; renderMon(); };
+}
+
+// ---------- Xodim ----------
+function renderEmp() {
+  const v = $('#view');
+  if (!S.emp) {
+    v.innerHTML = `<input class="q" id="q" placeholder="${T.search}" autocomplete="off"><div class="res" id="res"></div>`;
+    const q = $('#q'); let tm;
+    q.oninput = () => { clearTimeout(tm); tm = setTimeout(doSearch, 350); };
+    q.focus();
+    return;
+  }
+  v.innerHTML = `<div class="emp"><button id="bk">${T.back}</button><b>${esc(S.emp.fio)}</b></div>
+    <div class="sub2"><button data-t="salary" class="${S.empTab==='salary'?'on':''}">${T.salary}</button><button data-t="tabel" class="${S.empTab==='tabel'?'on':''}">${T.tabel}</button></div><div id="ep"><div class="msg">${T.loading}</div></div>`;
+  $('#bk').onclick = () => { S.emp = null; renderEmp(); };
+  v.querySelectorAll('.sub2 button').forEach(b => b.onclick = () => { S.empTab = b.dataset.t; renderEmp(); });
+  (S.empTab === 'salary' ? renderSalary : renderTabel)();
+}
+async function doSearch() {
+  const q = $('#q').value.trim(); const res = $('#res');
+  if (q.length < 2) { res.innerHTML = ''; return; }
+  res.innerHTML = `<div class="msg">${T.loading}</div>`;
+  let d; try { d = (await api({ api:'search', q })).data; } catch (e) { res.innerHTML = `<div class="msg err">${errText(e)}</div>`; return; }
+  if (!d.length) { res.innerHTML = `<div class="msg">${T.noRes}</div>`; return; }
+  res.innerHTML = d.map((e, i) => `<div data-i="${i}">${esc(e.fio)}<small>${esc(e.pos)}</small></div>`).join('');
+  res.querySelectorAll('div[data-i]').forEach(x => x.onclick = () => { S.emp = d[x.dataset.i]; renderEmp(); });
+}
+async function renderSalary() {
+  const ep = $('#ep');
+  let d; try { d = (await api({ api:'salary', pinfl:S.emp.pinfl })).data; } catch (e) { ep.innerHTML = errBox(e, 'renderSalary'); return; }
+  if (!d.months.length) { ep.innerHTML = `<div class="msg">${T.noData}</div>`; return; }
+  const L = S.init.lang;
+  ep.innerHTML = `<div class="tw"><table><tr><th>${T.month}</th>${d.columns.map(c => `<th>${esc(c[L])}</th>`).join('')}</tr>
+    ${d.months.map(m => `<tr><td>${esc(m.period)}</td>${m.values.map((x, i) => `<td${i===d.columns.length-1?' style="font-weight:600"':''}>${d.columns[i].days?fmt(x,2):fmt(x)}</td>`).join('')}</tr>`).join('')}</table></div><p class="sub" style="margin-top:8px">${T.sum}</p>`;
+}
+async function renderTabel() {
+  const ep = $('#ep');
+  const months = S.init.tabelMonths;
+  if (S.midx === null || !months.includes(S.midx)) S.midx = months[0];
+  ep.innerHTML = `<div style="margin-bottom:10px"><select id="ms">${months.map(m => `<option value="${m}" ${m===S.midx?'selected':''}>${T.months[m]}</option>`).join('')}</select></div><div id="tb"><div class="msg">${T.loading}</div></div>`;
+  $('#ms').onchange = e => { S.midx = Number(e.target.value); renderTabel(); };
+  const tb = $('#tb');
+  let d; try { d = (await api({ api:'tabel', pinfl:S.emp.pinfl, midx:S.midx })).data; } catch (e) { tb.innerHTML = errBox(e, 'renderTabel'); return; }
+  if (!d.found) { tb.innerHTML = `<div class="msg">${T.notInTabel}</div>`; return; }
+  const dim = new Date(S.init.today[0], d.midx + 1, 0).getDate();
+  tb.innerHTML = `<div class="stat"><div><b>${d.totalDays ?? d.w}</b><span>${T.worked}</span></div><div><b>${fmt(d.extra)}</b><span>${T.extra}</span></div><div><b style="color:var(--abs)">${d.a}</b><span>${T.abs}</span></div></div>
+    <div class="cal">${d.days.slice(0, dim).map(x => `<div class="${x.k==='u'?'':x.k}">${x.d}${x.hrs?`<small>+${x.hrs}</small>`:''}</div>`).join('')}</div>
+    <div class="legend"><span><i class="dot" style="background:var(--ok)"></i>${T.worked}</span><span><i class="dot" style="background:var(--abs)"></i>${T.k.a}</span><span><i class="dot" style="background:var(--vac)"></i>${T.k.v}</span><span><i class="dot" style="background:var(--sick)"></i>${T.k.s}</span><span><i class="dot" style="background:#6b4f9e"></i>${T.k.b}</span></div>`;
+}
+boot();
+</script>
+</body>
+</html>
