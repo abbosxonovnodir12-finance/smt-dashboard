@@ -40,7 +40,7 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-09-12.4';
+var BOT_VERSION = '2026-09-12.5';
 var API_CACHE_SEC = 120; // Mini App ma'lumotlari keshi (soniya) // /version buyrug'i shu qiymatni qaytaradi
 var REPORT_HOUR = 10;
 var LOG_KEEP_DAYS = 90;    // Log: shundan eski qatorlar o'chiriladi
@@ -993,10 +993,12 @@ function handleApi(req) {
   var L = (rec && rec.v[T.LANG]) || (user.language_code === 'ru' ? 'ru' : 'uz');
   try {
     switch (req.api) {
-      case 'init': {
-        var months = tabelMonthSheets(tabelFile()).map(function (m) { return m.idx; });
+      case 'init': case 'boot': {
+        var months = cached('months', function () { return tabelMonthSheets(tabelFile()).map(function (m) { return m.idx; }); }, 600);
         var today = new Date();
-        return { ok: true, lang: L, name: user.first_name || '', today: [today.getFullYear(), today.getMonth(), today.getDate()], tabelMonths: months, version: BOT_VERSION };
+        var res = { ok: true, lang: L, name: user.first_name || '', today: [today.getFullYear(), today.getMonth(), today.getDate()], tabelMonths: months, version: BOT_VERSION };
+        if (req.api === 'boot') res.daily = cached('daily:0', function () { return dailyData(0); }); // bitta so'rovda ikkalasi
+        return res;
       }
       case 'daily': return { ok: true, data: cached('daily:' + (req.daysAgo || 0), function () { return dailyData(Number(req.daysAgo || 0)); }) };
       case 'monthly': return { ok: true, data: cached('monthly:' + (req.monthsAgo || 0), function () { return monthlyData(Number(req.monthsAgo || 0)); }) };
@@ -1010,11 +1012,11 @@ function handleApi(req) {
     return { ok: false, error: 'server', message: String(e) };
   }
 }
-function cached(key, fn) {
+function cached(key, fn, sec) {
   var c = CacheService.getScriptCache(), v = c.get('api_' + key);
   if (v) return JSON.parse(v);
   var data = fn();
-  try { c.put('api_' + key, JSON.stringify(data), API_CACHE_SEC); } catch (e) {} // 100KB dan katta bo'lsa keshlanmaydi
+  try { c.put('api_' + key, JSON.stringify(data), sec || API_CACHE_SEC); } catch (e) {} // 100KB dan katta bo'lsa keshlanmaydi
   return data;
 }
 function markKind(mark) { // 'w' ishlagan, 'h' yarim, 'a' прогул, 'v' ta'til, 's' kasal, 'b' Бс, 'u' belgilanmagan, 'x' boshqa

@@ -101,14 +101,14 @@ const API_URL = 'https://script.google.com/macros/s/AKfycbwDoGkQgMFBR5YNmnUppao5
 const I18N = {
   uz: { day:'Bugun', mon:'Oy', emp:'Xodim', today:'Bugun', total:'Jami', present:'kelgan', absent:'kelmagan', unmarked:'belgilanmagan',
     notFilled:"Bu kun uchun табель hali to'ldirilmagan.", loading:'Yuklanmoqda…', auth:'Kirish tekshiruvi o\'tmadi. Dashboard\'ni bot orqali oching.',
-    forbidden:'Bu bo\'lim faqat rahbarlar uchun.', server:'Server xatosi. Keyinroq urinib ko\'ring.', net:'Ulanish yo\'q. Internetni tekshiring.', unstable:'Server javob bermadi. Bir necha soniyadan keyin qayta urinib ko\'ring.', retry:'Qayta urinish',
+    forbidden:'Bu bo\'lim faqat rahbarlar uchun.', server:'Server xatosi. Keyinroq urinib ko\'ring.', net:'Ulanish yo\'q. Internetni tekshiring.', unstable:'Server javob bermadi. Bir necha soniyadan keyin qayta urinib ko\'ring.', slow:'Server sekin javob beryapti, biroz kuting…', retry:'Qayta urinish',
     k:{a:'прогул',v:"ta'til",s:'kasal',b:'Бс',h:'yarim kun',x:'?'}, emps:'Xodimlar', workdays:'ish-kun', abs:'прогул', vac:"ta'til", sick:'kasallik',
     top:"TOP-10 eng ko'p kelmaganlar", noabs:'Прогул yo\'q 👍', dept:'Bo\'lim', people:'xodim', days:'kun', search:'Familiya yoki ism…', noRes:'Topilmadi',
     salary:'Oylik', tabel:'Davomat', back:'‹', noData:"Ma'lumot yo'q", notInTabel:'Табельда topilmadi', worked:'Ishlangan', extra:'Qo\'sh. soat', month:'Oy',
     months:['Yanvar','Fevral','Mart','Aprel','May','Iyun','Iyul','Avgust','Sentabr','Oktabr','Noyabr','Dekabr'], sum:"so'm" },
   ru: { day:'Сегодня', mon:'Месяц', emp:'Сотрудник', today:'Сегодня', total:'Итого', present:'присутствуют', absent:'отсутствуют', unmarked:'не отмечено',
     notFilled:'Табель за этот день ещё не заполнен.', loading:'Загрузка…', auth:'Проверка входа не пройдена. Откройте дашборд через бота.',
-    forbidden:'Раздел только для руководителей.', server:'Ошибка сервера. Попробуйте позже.', net:'Нет соединения. Проверьте интернет.', unstable:'Сервер не ответил. Попробуйте через несколько секунд.', retry:'Повторить',
+    forbidden:'Раздел только для руководителей.', server:'Ошибка сервера. Попробуйте позже.', net:'Нет соединения. Проверьте интернет.', unstable:'Сервер не ответил. Попробуйте через несколько секунд.', slow:'Сервер отвечает медленно, подождите…', retry:'Повторить',
     k:{a:'прогул',v:'отпуск',s:'больн.',b:'Бс',h:'полдня',x:'?'}, emps:'Сотрудники', workdays:'отраб. дней', abs:'прогулы', vac:'отпуск', sick:'больн.',
     top:'TOP-10 по прогулам', noabs:'Прогулов нет 👍', dept:'Отдел', people:'сотр.', days:'дн.', search:'Фамилия или имя…', noRes:'Не найдено',
     salary:'Зарплата', tabel:'Табель', back:'‹', noData:'Нет данных', notInTabel:'Не найден в табеле', worked:'Отработано', extra:'Доп. часы', month:'Месяц',
@@ -128,20 +128,25 @@ async function api(body, attempt = 0) {
   if (S.cache[key]) return S.cache[key];
   let r, j;
   try {
-    const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 25000);
+    const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 12000);
     r = await fetch(API_URL, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(Object.assign({ initData }, body)), redirect:'follow', signal: ctl.signal });
     clearTimeout(tm);
     j = await r.json(); // Google vaqtincha HTML qaytarsa — bu yerda xato
   } catch (e) {
-    if (attempt < 2) { await new Promise(res => setTimeout(res, 1200 * (attempt + 1))); return api(body, attempt + 1); }
+    if (attempt < 1) { await new Promise(res => setTimeout(res, 800)); return api(body, attempt + 1); }
     throw new Error(navigator.onLine === false ? 'net' : 'unstable');
   }
   if (!j.ok) {
-    if (j.error === 'server' && attempt < 1) { await new Promise(res => setTimeout(res, 1500)); return api(body, attempt + 1); }
+    if (j.error === 'server' && attempt < 1) { await new Promise(res => setTimeout(res, 800)); return api(body, attempt + 1); }
     throw new Error(j.error || 'server');
   }
   if (body.api !== 'search') S.cache[key] = j;
   return j;
+}
+let slowTimer = null;
+function loading(el) { // 4 soniyadan keyin "server sekin" degan izoh
+  el.innerHTML = `<div class="msg">${T.loading}<div class="slow" style="display:none;margin-top:8px;font-size:13px">${T.slow}</div></div>`;
+  clearTimeout(slowTimer); slowTimer = setTimeout(() => { const x = el.querySelector('.slow'); if (x) x.style.display = 'block'; }, 4000);
 }
 function showMsg(html, err, retry) {
   $('#view').innerHTML = `<div class="msg${err?' err':''}">${html}${retry?`<div style="margin-top:14px"><button class="rt">${T.retry}</button></div>`:''}</div>`;
@@ -151,8 +156,10 @@ function errBox(e, retry) { return `<div class="msg err">${errText(e)}<div style
 function errText(e) { return T[e.message] || T.server; }
 
 async function boot() {
+  loading($('#view'));
   try {
-    const j = await api({ api:'init' });
+    const j = await api({ api:'boot' });
+    if (j.daily) S.cache[JSON.stringify({ api:'daily', daysAgo:0 })] = { ok:true, data:j.daily };
     S.init = j; T = I18N[j.lang] || I18N.uz;
     document.documentElement.lang = j.lang;
     $('#sub').textContent = `${j.name} · ${dd(j.today[2])}.${dd(j.today[1]+1)}.${j.today[0]}`;
@@ -169,7 +176,7 @@ function render() { ({ day: renderDay, mon: renderMon, emp: renderEmp })[S.view]
 
 // ---------- Bugun ----------
 async function renderDay() {
-  const v = $('#view'); v.innerHTML = `<div class="msg">${T.loading}</div>`;
+  const v = $('#view'); loading(v);
   let d; try { d = (await api({ api:'daily', daysAgo:S.daysAgo })).data; } catch (e) { return showMsg(errText(e), true, renderDay); }
   const date = `${dd(d.date[2])}.${dd(d.date[1]+1)}.${d.date[0]}`;
   let h = `<div class="nav"><button id="pv">‹</button><b>${S.daysAgo===0?T.today+', ':''}${date}</b><button id="nx" ${S.daysAgo===0?'disabled':''}>›</button></div>`;
@@ -193,7 +200,7 @@ async function renderDay() {
 
 // ---------- Oy ----------
 async function renderMon() {
-  const v = $('#view'); v.innerHTML = `<div class="msg">${T.loading}</div>`;
+  const v = $('#view'); loading(v);
   let d; try { d = (await api({ api:'monthly', monthsAgo:S.monthsAgo })).data; } catch (e) { return showMsg(errText(e), true, renderMon); }
   let h = `<div class="nav"><button id="pv">‹</button><b>${T.months[d.month[1]]} ${d.month[0]}</b><button id="nx" ${S.monthsAgo===0?'disabled':''}>›</button></div>`;
   if (!d.filled) h += `<div class="msg">${T.notFilled}</div>`;
