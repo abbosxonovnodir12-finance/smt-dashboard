@@ -40,8 +40,9 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-09-15.1';
-var API_CACHE_SEC = 120; // Mini App ma'lumotlari keshi (soniya) // /version buyrug'i shu qiymatni qaytaradi
+var BOT_VERSION = '2026-09-15.2';
+var API_CACHE_SEC = 900; // Mini App ma'lumotlari keshi (soniya); warmApiCache() har 5 daqiqada yangilab turadi
+var WARM_MINUTES = 5;
 var REPORT_HOUR = 10;
 var LOG_KEEP_DAYS = 90;    // Log: shundan eski qatorlar o'chiriladi
 var LOG_MAX_ROWS = 20000;  // Log: shundan ko'p bo'lsa eng eskilari o'chiriladi // kunlik hisobot soati (loyiha vaqt zonasi: Asia/Tashkent)
@@ -737,11 +738,23 @@ function dailyReport() {
 function installTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     var f = t.getHandlerFunction();
-    if (f === 'dailyReport' || f === 'monthlyReport') ScriptApp.deleteTrigger(t);
+    if (f === 'dailyReport' || f === 'monthlyReport' || f === 'warmApiCache') ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('dailyReport').timeBased().atHour(REPORT_HOUR).everyDays(1).create();
   ScriptApp.newTrigger('monthlyReport').timeBased().onMonthDay(2).atHour(REPORT_HOUR).create();
-  Logger.log('Triggerlar o\'rnatildi: har kuni va har oyning 2-sanasida, soat ' + REPORT_HOUR);
+  ScriptApp.newTrigger('warmApiCache').timeBased().everyMinutes(WARM_MINUTES).create();
+  warmApiCache();
+  Logger.log('Triggerlar o\'rnatildi: har kuni va har oyning 2-sanasida, soat ' + REPORT_HOUR + '; API keshi har ' + WARM_MINUTES + ' daqiqada');
+}
+/** Mini App uchun eng ko'p so'raladigan ma'lumotlarni oldindan hisoblab keshga yozadi — dashboard darhol ochiladi */
+function warmApiCache() {
+  var c = CacheService.getScriptCache(), items = {};
+  try { items['api_months'] = tabelMonthSheets(tabelFile()).map(function (m) { return m.idx; }); } catch (e) {}
+  try { items['api_daily:0'] = dailyData(0); } catch (e) {}
+  try { items['api_daily:1'] = dailyData(1); } catch (e) {}
+  try { items['api_monthly:0'] = monthlyData(0); } catch (e) {}
+  try { items['api_monthly:1'] = monthlyData(1); } catch (e) {}
+  Object.keys(items).forEach(function (k) { try { c.put(k, JSON.stringify(items[k]), API_CACHE_SEC); } catch (e) {} });
 }
 function installDailyTrigger() { installTriggers(); }
 function buildReport(r, L) {
@@ -1011,13 +1024,15 @@ function verifyInitData(initData) {
 function handleApi(req) {
   var user = verifyInitData(req.initData);
   if (!user) return { ok: false, error: 'auth' };
-  var uid = user.id, rec = findByTgId(uid);
-  if (!isManager(rec, uid)) return { ok: false, error: 'forbidden' };
-  var L = (rec && rec.v[T.LANG]) || (user.language_code === 'ru' ? 'ru' : 'uz');
+  var uid = user.id;
+  // Rahbarlik tekshiruvi 10 daqiqa keshlanadi — har so'rovda Telegram varag'ini o'qimaymiz
+  var who = cached('who:' + uid, function () { var r = findByTgId(uid); return { mgr: isManager(r, uid), lang: r ? r.v[T.LANG] : '' }; }, 600);
+  if (!who.mgr) return { ok: false, error: 'forbidden' };
+  var L = who.lang || (user.language_code === 'ru' ? 'ru' : 'uz');
   try {
     switch (req.api) {
       case 'init': case 'boot': {
-        var months = cached('months', function () { return tabelMonthSheets(tabelFile()).map(function (m) { return m.idx; }); }, 600);
+        var months = cached('months', function () { return tabelMonthSheets(tabelFile()).map(function (m) { return m.idx; }); });
         var today = new Date();
         var res = { ok: true, lang: L, name: user.first_name || '', today: [today.getFullYear(), today.getMonth(), today.getDate()], tabelMonths: months, version: BOT_VERSION };
         if (req.api === 'boot') res.daily = cached('daily:0', function () { return dailyData(0); }); // bitta so'rovda ikkalasi

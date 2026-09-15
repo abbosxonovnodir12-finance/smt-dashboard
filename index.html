@@ -123,30 +123,48 @@ const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;
 const fmt = (n, d=0) => { const x = Number(n)||0; const p = Math.abs(x).toFixed(d).split('.'); p[0]=p[0].replace(/\B(?=(\d{3})+(?!\d))/g,' '); return (x<0?'-':'')+(d?p.join(','):p[0]); };
 const dd = n => (n<10?'0':'')+n;
 
-async function api(body, attempt = 0) {
+// Brauzer keshi (localStorage): oxirgi muvaffaqiyatli javob darhol ko'rsatiladi, yangisi fonda yuklanadi
+const LS_TTL = 6 * 3600 * 1000, LS_PREFIX = 'smt:';
+const lsGet = k => { try { const v = JSON.parse(localStorage.getItem(LS_PREFIX + k)); return v && Date.now() - v.t < LS_TTL ? v.j : null; } catch (e) { return null; } };
+const lsPut = (k, j) => { try { localStorage.setItem(LS_PREFIX + k, JSON.stringify({ t: Date.now(), j })); } catch (e) {} };
+const inflight = {};
+async function fetchApi(body) {
+  const key = JSON.stringify(body);
+  if (inflight[key]) return inflight[key];
+  inflight[key] = (async () => {
+    let j;
+    try {
+      const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 30000);
+      const r = await fetch(API_URL, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(Object.assign({ initData }, body)), redirect:'follow', signal: ctl.signal });
+      clearTimeout(tm);
+      j = await r.json(); // Google vaqtincha HTML qaytarsa — bu yerda xato
+    } catch (e) {
+      throw new Error(navigator.onLine === false ? 'net' : 'unstable');
+    }
+    if (!j.ok) throw new Error(j.error || 'server');
+    if (body.api !== 'search') { S.cache[key] = j; lsPut(key, j); }
+    return j;
+  })();
+  try { return await inflight[key]; } finally { delete inflight[key]; }
+}
+// api(): xotira keshi → localStorage (darhol, fonda yangilanadi) → server. Bitta urinish, avtomatik qayta urinish yo'q.
+async function api(body, onFresh) {
   const key = JSON.stringify(body);
   if (S.cache[key]) return S.cache[key];
-  let r, j;
-  try {
-    const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 12000);
-    r = await fetch(API_URL, { method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'}, body: JSON.stringify(Object.assign({ initData }, body)), redirect:'follow', signal: ctl.signal });
-    clearTimeout(tm);
-    j = await r.json(); // Google vaqtincha HTML qaytarsa — bu yerda xato
-  } catch (e) {
-    if (attempt < 1) { await new Promise(res => setTimeout(res, 800)); return api(body, attempt + 1); }
-    throw new Error(navigator.onLine === false ? 'net' : 'unstable');
+  const stale = body.api !== 'search' ? lsGet(key) : null;
+  if (stale) {
+    S.cache[key] = stale;
+    const view = S.view;
+    fetchApi(body).then(j => { if (JSON.stringify(j) !== JSON.stringify(stale)) (onFresh || (() => { if (S.view === view) render(); }))(j); }).catch(() => {});
+    return stale;
   }
-  if (!j.ok) {
-    if (j.error === 'server' && attempt < 1) { await new Promise(res => setTimeout(res, 800)); return api(body, attempt + 1); }
-    throw new Error(j.error || 'server');
-  }
-  if (body.api !== 'search') S.cache[key] = j;
-  return j;
+  return fetchApi(body);
 }
+const prefetch = body => { const key = JSON.stringify(body); if (!S.cache[key]) fetchApi(body).catch(() => {}); };
 let slowTimer = null;
 function loading(el) { // 4 soniyadan keyin "server sekin" degan izoh
   el.innerHTML = `<div class="msg">${T.loading}<div class="slow" style="display:none;margin-top:8px;font-size:13px">${T.slow}</div></div>`;
-  clearTimeout(slowTimer); slowTimer = setTimeout(() => { const x = el.querySelector('.slow'); if (x) x.style.display = 'block'; }, 4000);
+  clearTimeout(slowTimer); slowTimer = setTimeout(() => { const x = el.querySelector('.slow'); if (x) x.style.display = 'block'; }, 3000);
 }
 function showMsg(html, err, retry) {
   $('#view').innerHTML = `<div class="msg${err?' err':''}">${html}${retry?`<div style="margin-top:14px"><button class="rt">${T.retry}</button></div>`:''}</div>`;
@@ -155,17 +173,21 @@ function showMsg(html, err, retry) {
 function errBox(e, retry) { return `<div class="msg err">${errText(e)}<div style="margin-top:14px"><button class="rt" onclick="(${retry})()">${T.retry}</button></div></div>`; }
 function errText(e) { return T[e.message] || T.server; }
 
+function applyBoot(j) {
+  if (j.daily) S.cache[JSON.stringify({ api:'daily', daysAgo:0 })] = { ok:true, data:j.daily };
+  S.init = j; T = I18N[j.lang] || I18N.uz;
+  document.documentElement.lang = j.lang;
+  $('#sub').textContent = `${j.name} · ${dd(j.today[2])}.${dd(j.today[1]+1)}.${j.today[0]}`;
+  $('#seg').querySelectorAll('button').forEach(b => b.textContent = T[b.dataset.v]);
+  if (S.midx === null || !j.tabelMonths.includes(S.midx)) S.midx = j.tabelMonths[0] ?? j.today[1];
+}
 async function boot() {
   loading($('#view'));
   try {
-    const j = await api({ api:'boot' });
-    if (j.daily) S.cache[JSON.stringify({ api:'daily', daysAgo:0 })] = { ok:true, data:j.daily };
-    S.init = j; T = I18N[j.lang] || I18N.uz;
-    document.documentElement.lang = j.lang;
-    $('#sub').textContent = `${j.name} · ${dd(j.today[2])}.${dd(j.today[1]+1)}.${j.today[0]}`;
-    $('#seg').querySelectorAll('button').forEach(b => b.textContent = T[b.dataset.v]);
-    S.midx = j.tabelMonths[0] ?? j.today[1];
+    const j = await api({ api:'boot' }, fresh => { applyBoot(fresh); render(); }); // eski nusxa darhol, yangisi kelganda qayta chiziladi
+    applyBoot(j);
     render();
+    setTimeout(() => { prefetch({ api:'monthly', monthsAgo:0 }); prefetch({ api:'daily', daysAgo:1 }); }, 1500); // "Oy" va "Kecha" oldindan
   } catch (e) { showMsg(errText(e), true, boot); }
 }
 $('#seg').addEventListener('click', e => {
