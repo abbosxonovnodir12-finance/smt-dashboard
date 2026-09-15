@@ -40,7 +40,7 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-09-12.5';
+var BOT_VERSION = '2026-09-15.1';
 var API_CACHE_SEC = 120; // Mini App ma'lumotlari keshi (soniya) // /version buyrug'i shu qiymatni qaytaradi
 var REPORT_HOUR = 10;
 var LOG_KEEP_DAYS = 90;    // Log: shundan eski qatorlar o'chiriladi
@@ -73,7 +73,7 @@ var MSG = {
     m_title: "📈 Davomat yakuni", m_emps: "Xodimlar", m_workdays: "ishlangan kun-jami", m_abs: "прогул", m_vac: "ta'til", m_sick: "kasallik",
     m_top: "TOP-10 eng ko'p kelmaganlar (прогул)", m_noabs: "Прогул yo'q 👍", m_sections: "Bo'limlar", m_emp: "xodim",
     mark_abs: "прогул", mark_vac: "ta'til", mark_sick: "kasal", mark_bs: "Бс", mark_half: "yarim kun",
-    ask_name: "Xodimning familiyasi yoki ismini yozing (bekor qilish: /cancel):", no_match: "Topilmadi. Boshqacha yozib ko'ring:",
+    ask_name: "Xodimning familiyasi yoki ismini yozing (bekor qilish: «🔙 Orqaga»):", no_match: "Topilmadi. Boshqacha yozib ko'ring:",
     pick_emp: "Xodimni tanlang:", not_allowed: "Bu bo'lim faqat rahbarlar uchun.",
     btn_tabel: "📅 Davomat", tabel_title: "📅 Davomat", tabel_none: "Табельда sizning ismingiz topilmadi. Adminga ariza yuboring.",
     tabel_nodata: "Bu oy uchun ma'lumot hali kiritilmagan.", tabel_err: "Davomat ma'lumoti vaqtincha mavjud emas.",
@@ -84,9 +84,9 @@ var MSG = {
     months: ["Yanvar","Fevral","Mart","Aprel","May","Iyun","Iyul","Avgust","Sentabr","Oktabr","Noyabr","Dekabr"],
     choose_month: "Oyni tanlang:",
     no_data: "Sizga tegishli ma'lumot topilmadi.",
-    ask_request: "Arizangiz matnini yozing (bekor qilish uchun /cancel):",
+    ask_request: "Arizangiz matnini yozing. Bekor qilish uchun «🔙 Orqaga» tugmasini bosing:",
     request_sent: "✉️ Arizangiz adminga yuborildi.",
-    cancelled: "Bekor qilindi.",
+    cancelled: "Bekor qilindi.", btn_back: "🔙 Orqaga",
     not_registered: "Avval ro'yxatdan o'ting: /start",
     days: "kun", sum: "so'm",
     report_title: "📄 Oylik ma'lumoti"
@@ -117,7 +117,7 @@ var MSG = {
     m_title: "📈 Итоги табеля", m_emps: "Сотрудники", m_workdays: "отработано дней всего", m_abs: "прогулы", m_vac: "отпуск", m_sick: "больничный",
     m_top: "TOP-10 по прогулам", m_noabs: "Прогулов нет 👍", m_sections: "Отделы", m_emp: "сотр.",
     mark_abs: "прогул", mark_vac: "отпуск", mark_sick: "больн.", mark_bs: "Бс", mark_half: "полдня",
-    ask_name: "Введите фамилию или имя сотрудника (отмена: /cancel):", no_match: "Не найдено. Попробуйте иначе:",
+    ask_name: "Введите фамилию или имя сотрудника (отмена: «🔙 Назад»):", no_match: "Не найдено. Попробуйте иначе:",
     pick_emp: "Выберите сотрудника:", not_allowed: "Этот раздел только для руководителей.",
     btn_tabel: "📅 Табель", tabel_title: "📅 Табель", tabel_none: "Ваше имя не найдено в табеле. Отправьте заявку админу.",
     tabel_nodata: "Данные за этот месяц ещё не внесены.", tabel_err: "Данные табеля временно недоступны.",
@@ -128,9 +128,9 @@ var MSG = {
     months: ["Январь","Февраль","Март","Апрель","Май","Июнь","Июль","Август","Сентябрь","Октябрь","Ноябрь","Декабрь"],
     choose_month: "Выберите месяц:",
     no_data: "Данных по вам не найдено.",
-    ask_request: "Напишите текст заявки (для отмены /cancel):",
+    ask_request: "Напишите текст заявки. Для отмены нажмите «🔙 Назад»:",
     request_sent: "✉️ Заявка отправлена админу.",
-    cancelled: "Отменено.",
+    cancelled: "Отменено.", btn_back: "🔙 Назад",
     not_registered: "Сначала зарегистрируйтесь: /start",
     days: "дн.", sum: "сум",
     report_title: "📄 Данные о зарплате"
@@ -173,11 +173,19 @@ function prop(k) { return PropertiesService.getScriptProperties().getProperty(k)
 
 // ---------- Telegram API ----------
 function tg(method, payload) {
-  var res = UrlFetchApp.fetch('https://api.telegram.org/bot' + prop('BOT_TOKEN') + '/' + method, {
-    method: 'post', contentType: 'application/json',
-    payload: JSON.stringify(payload), muteHttpExceptions: true
-  });
-  return JSON.parse(res.getContentText());
+  // Google → Telegram tarmog'i vaqti-vaqti bilan uziladi ("Address unavailable") — 3 marta urinamiz
+  var url = 'https://api.telegram.org/bot' + prop('BOT_TOKEN') + '/' + method;
+  var opt = { method: 'post', contentType: 'application/json', payload: JSON.stringify(payload), muteHttpExceptions: true };
+  var lastErr;
+  for (var i = 0; i < 3; i++) {
+    if (i) Utilities.sleep(700 * i);
+    try {
+      var res = UrlFetchApp.fetch(url, opt);
+      if (res.getResponseCode() >= 500) { lastErr = new Error('Telegram HTTP ' + res.getResponseCode()); continue; }
+      return JSON.parse(res.getContentText());
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr;
 }
 function send(chatId, text, kb) {
   var p = { chat_id: chatId, text: text, parse_mode: 'HTML' };
@@ -253,6 +261,13 @@ function mainMenu(L, mgr) {
   if (mgr) { kb.push([MSG[L].btn_daily, MSG[L].btn_lookup]); if (prop('MINIAPP_URL')) kb.push([MSG[L].btn_dash]); }
   kb.push([MSG[L].btn_lang, MSG[L].btn_request]);
   return { keyboard: kb, resize_keyboard: true };
+}
+function backKb(L) { return { keyboard: [[MSG[L].btn_back]], resize_keyboard: true }; }
+// Matn asosiy menyu tugmasimi (ikkala tilda) — matn kiritish bosqichida bosilsa, ariza/qidiruv sifatida ketmasin
+var MENU_KEYS = ['btn_salary', 'btn_bonus', 'btn_tabel', 'btn_me', 'btn_daily', 'btn_lookup', 'btn_dash', 'btn_lang', 'btn_request', 'btn_back'];
+function isMenuText(text) {
+  for (var i = 0; i < MENU_KEYS.length; i++) if (text === MSG.uz[MENU_KEYS[i]] || text === MSG.ru[MENU_KEYS[i]]) return true;
+  return false;
 }
 function langKb() { return { inline_keyboard: [[{ text: "O'zbekcha", callback_data: 'lang:uz' }, { text: 'Русский', callback_data: 'lang:ru' }]] }; }
 
@@ -347,8 +362,14 @@ function handleMessage(m) {
     setState(uid, { step: 'lang' });
     return send(chat, MSG.uz.choose_lang, langKb());
   }
-  if (text === '/ariza' || text === '/zayavka') { setState(uid, { step: 'request', lang: L, pinfl: st.pinfl }); return send(chat, MSG[L].ask_request); }
-  if (text === '/cancel') { clearState(uid); return send(chat, MSG[L].cancelled, rec ? mainMenu(L) : removeKb()); }
+  if (text === '/ariza' || text === '/zayavka') { setState(uid, { step: 'request', lang: L, pinfl: st.pinfl }); return send(chat, MSG[L].ask_request, backKb(L)); }
+  var active = rec && rec.v[T.STATUS] === 'active';
+  if (text === '/cancel' || text === MSG.uz.btn_back || text === MSG.ru.btn_back) {
+    clearState(uid);
+    return send(chat, active ? MSG[L].menu : MSG[L].cancelled, active ? mainMenu(L) : removeKb());
+  }
+  // Ariza/qidiruv bosqichida menyu tugmasi yoki buyruq bosilsa — bosqichni tark etib, odatdagidek ishlaymiz
+  if ((st.step === 'request' || st.step === 'mgr_find') && (isMenuText(text) || text.charAt(0) === '/')) { clearState(uid); st = {}; }
 
   // Ro'yxatdan o'tish bosqichlari
   if (st.step === 'pinfl') return stepPinfl(uid, chat, text, st);
@@ -357,7 +378,7 @@ function handleMessage(m) {
     if (String(m.contact.user_id) !== String(uid)) return send(chat, MSG[L].own_contact, phoneKb(L));
     return withLock(function () { return stepPhone(uid, chat, m, st); });
   }
-  if (st.step === 'request') return stepRequest(uid, chat, text, rec, L);
+  if (st.step === 'request') return stepRequest(uid, chat, text, rec, L, m);
   if (st.step === 'mgr_find') {
     if (!MGR) { clearState(uid); return send(chat, MSG[L].not_allowed, mainMenu(L)); }
     return stepMgrFind(uid, chat, text, L);
@@ -377,7 +398,7 @@ function handleMessage(m) {
   }
   if (text === MSG.uz.btn_lookup || text === MSG.ru.btn_lookup) {
     if (!MGR) return send(chat, MSG[L].not_allowed, mainMenu(L));
-    setState(uid, { step: 'mgr_find', lang: L }); return send(chat, MSG[L].ask_name);
+    setState(uid, { step: 'mgr_find', lang: L }); return send(chat, MSG[L].ask_name, backKb(L));
   }
 
   // Asosiy menyu (faqat active)
@@ -390,7 +411,7 @@ function handleMessage(m) {
   if (text === MSG.uz.btn_tabel || text === MSG.ru.btn_tabel) return showTabelMonths(chat, rec, L);
   if (text === MSG.uz.btn_me || text === MSG.ru.btn_me) return showMe(chat, rec, L);
   if (text === MSG.uz.btn_lang || text === MSG.ru.btn_lang) return send(chat, MSG[L].choose_lang, langKb());
-  if (text === MSG.uz.btn_request || text === MSG.ru.btn_request) { setState(uid, { step: 'request' }); return send(chat, MSG[L].ask_request); }
+  if (text === MSG.uz.btn_request || text === MSG.ru.btn_request) { setState(uid, { step: 'request', lang: L }); return send(chat, MSG[L].ask_request, backKb(L)); }
   return send(chat, MSG[L].menu, mainMenu(L));
 }
 
@@ -406,7 +427,7 @@ function stepPinfl(uid, chat, text, st) {
   if (ex && ex.v[T.TG_ID] && String(ex.v[T.TG_ID]) !== String(uid) && ex.v[T.STATUS] !== '') {
     logAction(uid, pinfl, 'pinfl_taken');
     setState(uid, { step: 'request', lang: L, pinfl: pinfl });
-    return send(chat, MSG[L].taken + '\n\n' + MSG[L].ask_request);
+    return send(chat, MSG[L].taken + '\n\n' + MSG[L].ask_request, backKb(L));
   }
   setState(uid, { step: 'phone', lang: L, pinfl: pinfl, fio: fio });
   return send(chat, MSG[L].send_phone, phoneKb(L));
@@ -434,12 +455,14 @@ function stepPhone(uid, chat, m, st) {
     { inline_keyboard: [[{ text: '✅ Tasdiqlash', callback_data: 'ok:' + pinfl + ':' + uid }, { text: '❌ Rad etish', callback_data: 'no:' + pinfl + ':' + uid }]] });
 }
 
-function stepRequest(uid, chat, text, rec, L) {
-  if (!text) return send(chat, MSG[L].ask_request);
+function stepRequest(uid, chat, text, rec, L, m) {
+  if (!text) return send(chat, MSG[L].ask_request, backKb(L));
   var st = getState(uid);
-  var pinfl = rec ? rec.v[T.PINFL] : (st.pinfl || '—');
+  var pinfl = rec ? String(rec.v[T.PINFL]).trim() : (st.pinfl || '—');
   clearState(uid);
-  send(prop('ADMIN_ID'), '✉️ <b>Ariza</b>\nПИНФЛ: <code>' + pinfl + '</code>\nDan: ID ' + uid + '\n\n' + esc(text));
+  var fio = pinfl !== '—' ? (pinflInBase(pinfl) || '') : '';
+  var from = m ? [m.from.first_name, m.from.last_name].filter(Boolean).join(' ') + (m.from.username ? ' @' + m.from.username : '') : '';
+  send(prop('ADMIN_ID'), '✉️ <b>Ariza</b>\n' + (fio ? esc(fio) + '\n' : '') + 'ПИНФЛ: <code>' + pinfl + '</code>\nDan: ' + esc(from) + ' (ID ' + uid + ')\n\n' + esc(text));
   logAction(uid, pinfl, 'request');
   return send(chat, MSG[L].request_sent, rec && rec.v[T.STATUS] === 'active' ? mainMenu(L) : removeKb());
 }
@@ -563,7 +586,7 @@ function showReport(chat, rec, idx) {
 // ---------- Rahbar: xodim qidirish ----------
 function stepMgrFind(uid, chat, text, L) {
   var q = normName(text);
-  if (q.length < 3) return send(chat, MSG[L].ask_name);
+  if (q.length < 3) return send(chat, MSG[L].ask_name, backKb(L));
   var sh = SpreadsheetApp.getActive().getSheetByName(SHEET_BASE);
   var vals = sh.getRange(2, COL.PINFL + 1, sh.getLastRow() - 1, 2).getValues();
   var seen = {}, found = [];
