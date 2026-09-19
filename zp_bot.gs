@@ -40,7 +40,7 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-09-15.2';
+var BOT_VERSION = '2026-09-19.1';
 var API_CACHE_SEC = 900; // Mini App ma'lumotlari keshi (soniya); warmApiCache() har 5 daqiqada yangilab turadi
 var WARM_MINUTES = 5;
 var REPORT_HOUR = 10;
@@ -469,10 +469,24 @@ function stepRequest(uid, chat, text, rec, L, m) {
 }
 
 // ---------- Callbacks ----------
+// Tanlov qilingan inline xabarni "yopamiz": tugmalar olib tashlanadi, tanlangan variant yoziladi — eski tugmalar chalg'itmasin
+function pickedLabel(q) {
+  var kb = q.message && q.message.reply_markup && q.message.reply_markup.inline_keyboard || [];
+  for (var i = 0; i < kb.length; i++) for (var j = 0; j < kb[i].length; j++) if (kb[i][j].callback_data === q.data) return kb[i][j].text;
+  return '';
+}
+function closePicker(q) {
+  try {
+    var label = pickedLabel(q), base = q.message.text || '';
+    tg('editMessageText', { chat_id: q.message.chat.id, message_id: q.message.message_id, text: esc(base) + (label ? ' <b>' + esc(label) + '</b>' : ''), parse_mode: 'HTML' });
+  } catch (e) {}
+}
+var PICKERS = { lang: 1, month: 1, tab: 1, mp: 1, ms: 1, mt: 1, mm: 1, mtab: 1 };
 function handleCallback(q) {
   var uid = q.from.id, chat = q.message.chat.id, data = q.data || '';
   tg('answerCallbackQuery', { callback_query_id: q.id });
   var parts = data.split(':');
+  if (PICKERS[parts[0]]) closePicker(q);
   var recQ = findByTgId(uid);
   MGR = isManager(recQ, uid);
   if (parts[0] === 'day' || parts[0] === 'mon' || parts[0] === 'mp' || parts[0] === 'ms' || parts[0] === 'mt' || parts[0] === 'mm' || parts[0] === 'mtab') {
