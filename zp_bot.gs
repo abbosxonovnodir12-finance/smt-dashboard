@@ -10,6 +10,7 @@
  *  4. Deploy → New deployment → Web app: Execute as "Me", Access "Anyone". URL ni nusxalang.
  *  5. Script properties'ga WEBAPP_URL = shu URL ni yozing, keyin setWebhook() ni ishga tushiring.
  *  6. Telegram varaqiga ПИНФЛ + Telefon (kadrlar jadvalidan) ni to'ldiring.
+ *  7. (Ixtiyoriy) AI yordamchi: Script properties'ga OPENAI_API_KEY qo'shing — rahbarlar botga erkin savol yoki ovoz yuborishi mumkin bo'ladi.
  */
 
 var SHEET_BASE = 'база';
@@ -40,7 +41,7 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-09-19.1';
+var BOT_VERSION = '2026-09-26.1';
 var API_CACHE_SEC = 900; // Mini App ma'lumotlari keshi (soniya); warmApiCache() har 5 daqiqada yangilab turadi
 var WARM_MINUTES = 5;
 var REPORT_HOUR = 10;
@@ -276,7 +277,8 @@ function langKb() { return { inline_keyboard: [[{ text: "O'zbekcha", callback_da
 var ADMIN_HELP = '<b>Admin buyruqlari</b>\n' +
   '/stats — ro\'yxat statistikasi\n/pending — tasdiq kutayotganlar (tugmalar bilan)\n' +
   '/broadcast matn — barcha faol xodimlarga xabar (avval ko\'rsatadi, keyin tasdiqlaysiz)\n' +
-  '/unlink ПИНФЛ — bog\'lanishni bekor qilish\n/version — bot versiyasi\n/id — Telegram ID';
+  '/unlink ПИНФЛ — bog\'lanishni bekor qilish\n/version — bot versiyasi\n/id — Telegram ID\n\n' +
+  '<b>AI yordamchi</b> (rahbarlar): botga erkin savol yozing yoki ovozli xabar yuboring — masalan «Aliyevning avgust oyligi», «Bugun kim kelmadi?»';
 
 function adminStats(chat) {
   var rows = tgRows(), c = { active: 0, pending: 0, mgr: 0, uz: 0, ru: 0 };
@@ -401,6 +403,12 @@ function handleMessage(m) {
     if (!MGR) return send(chat, MSG[L].not_allowed, mainMenu(L));
     setState(uid, { step: 'mgr_find', lang: L }); return send(chat, MSG[L].ask_name, backKb(L));
   }
+
+  // AI yordamchi: rahbarning erkin savoli (matn yoki ovoz) — menyu tugmasi va buyruq bo'lmasa
+  if (MGR && !st.step && (m.voice || m.audio || (text && !isMenuText(text) && text.charAt(0) !== '/'))) {
+    return aiHandle(uid, chat, m, text, L, [m.from.first_name, m.from.last_name].filter(Boolean).join(' '));
+  }
+  if ((m.voice || m.audio) && !MGR) return send(chat, (AI_MSG[L] || AI_MSG.uz).onlyMgr, rec && rec.v[T.STATUS] === 'active' ? mainMenu(L) : removeKb());
 
   // Asosiy menyu (faqat active)
   if (!rec || rec.v[T.STATUS] !== 'active') {
@@ -1162,4 +1170,200 @@ function tabelData(pinfl, midx) {
   if (typeof r[TAB.DAYS] === 'number') out.totalDays = r[TAB.DAYS];
   if (typeof r[TAB.EXTRA] === 'number') out.extra = r[TAB.EXTRA];
   return out;
+}
+
+// =====================================================================
+// AI yordamchi (rahbarlar uchun): erkin matn yoki ovozli savol → OpenAI → jadval funksiyalari → javob.
+// Raqamlar faqat jadvaldan olinadi; model qaysi funksiyani chaqirishni tanlaydi.
+// Script properties: OPENAI_API_KEY (majburiy), AI_MODEL (ixtiyoriy, standart gpt-4o-mini), AI_STT_MODEL (standart gpt-4o-mini-transcribe)
+// =====================================================================
+var AI_MAX_STEPS = 6, AI_HIST_TURNS = 8, AI_HIST_SEC = 1800;
+var AI_MSG = {
+  uz: { off: "AI yordamchi sozlanmagan (OPENAI_API_KEY yo'q).", err: "AI yordamchi hozir javob bera olmadi. Qayta urinib ko'ring yoki menyudan foydalaning.",
+        heard: "🎙 ", noVoice: "Ovozli xabar tushunilmadi. Qayta yozib yuboring yoki matn yozing.", onlyMgr: "Erkin savollar faqat rahbarlar uchun. Menyudan foydalaning." },
+  ru: { off: "AI-помощник не настроен (нет OPENAI_API_KEY).", err: "AI-помощник сейчас не смог ответить. Повторите или воспользуйтесь меню.",
+        heard: "🎙 ", noVoice: "Голосовое сообщение не распознано. Повторите или напишите текстом.", onlyMgr: "Свободные вопросы только для руководителей. Воспользуйтесь меню." }
+};
+function aiEnabled() { return !!prop('OPENAI_API_KEY'); }
+
+// ---- Lotin → kirill transliteratsiya (ism qidirish uchun; база dagi F.I.O. kirillda) ----
+var LAT_CYR = [['sh','ш'],['ch','ч'],['yo','ё'],['yu','ю'],['ya','я'],['ye','е'],['ts','ц'],["o'",'ў'],['oʻ','ў'],['o‘','ў'],["g'",'ғ'],['gʻ','ғ'],['g‘','ғ'],
+  ['a','а'],['b','б'],['d','д'],['e','е'],['f','ф'],['g','г'],['h','ҳ'],['i','и'],['j','ж'],['k','к'],['l','л'],['m','м'],['n','н'],['o','о'],['p','п'],['q','қ'],['r','р'],['s','с'],['t','т'],['u','у'],['v','в'],['x','х'],['y','й'],['z','з'],["'",''],['ʼ','']];
+function latToCyr(s) {
+  s = String(s || '').toLowerCase(); var out = '', i = 0;
+  while (i < s.length) {
+    var hit = false;
+    for (var k = 0; k < LAT_CYR.length; k++) { var p = LAT_CYR[k][0]; if (s.substr(i, p.length) === p) { out += LAT_CYR[k][1]; i += p.length; hit = true; break; } }
+    if (!hit) { out += s[i]; i++; }
+  }
+  return out.replace(/ийе/g, 'ие').replace(/ий([аеёиоуўэюя])/g, 'и$1');
+}
+function nameKey(s) { return normName(/[a-z]/i.test(String(s)) ? latToCyr(s) : s); }
+// Xodimni ism bo'yicha topish: token darajasida boshlanish yoki Levenshtein ≤ 2 (ism qisqartmalari va imlo xatolariga chidamli)
+function aiFindEmployees(query) {
+  var qTok = String(query || '').split(/[\s,.]+/).map(nameKey).filter(function (t) { return t.length >= 2; });
+  if (!qTok.length) return [];
+  var sh = SpreadsheetApp.getActive().getSheetByName(SHEET_BASE);
+  var vals = sh.getRange(2, 1, sh.getLastRow() - 1, 5).getValues(), seen = {}, out = [];
+  for (var i = vals.length - 1; i >= 0; i--) {
+    var p = String(vals[i][COL.PINFL]).trim(), fio = String(vals[i][COL.FIO]).trim();
+    if (!p || seen[p]) continue; seen[p] = 1;
+    var fTok = fio.split(/[\s,.]+/).map(normName).filter(Boolean), score = 0;
+    qTok.forEach(function (q) {
+      var best = 0;
+      fTok.forEach(function (f) {
+        var s = 0;
+        if (f === q) s = 3; else if (f.indexOf(q) === 0 || q.indexOf(f) === 0) s = 2;
+        else if (q.length >= 5 && f.length >= 5 && q[0] === f[0] && lev(q, f) <= (Math.min(q.length, f.length) >= 7 ? 2 : 1)) s = 1; // imlo xatosi: bosh harf bir xil
+        if (s > best) best = s;
+      });
+      score += best;
+    });
+    if (score >= Math.min(2, qTok.length * 1)) out.push({ pinfl: p, fio: fio, position: String(vals[i][4] || ''), score: score });
+  }
+  out.sort(function (a, b) { return b.score - a.score; });
+  return out.slice(0, 8).map(function (e) { return { pinfl: e.pinfl, fio: e.fio, position: e.position }; });
+}
+// ---- Asboblar (tools) — model chaqiradi, natija JSON ----
+var AI_TOOLS = [
+  { type: 'function', function: { name: 'find_employee', description: 'Xodimni familiya/ism bo\'yicha topadi (lotin yoki kirill, taxminiy yozilish ham bo\'ladi). Har qanday xodim haqidagi savol oldidan chaqiring. Bir nechta natija bo\'lsa — foydalanuvchidan aniqlashtiring.',
+      parameters: { type: 'object', properties: { query: { type: 'string', description: 'Familiya va/yoki ism' } }, required: ['query'] } } },
+  { type: 'function', function: { name: 'get_salary', description: 'Xodimning oylik ma\'lumoti (reja/fakt kunlar, oklad, hisoblangan, mukofot, ta\'til, kasallik, kompensatsiya, JAMI). Davr berilmasa — eng oxirgi oy. Mavjud davrlar ro\'yxati ham qaytadi.',
+      parameters: { type: 'object', properties: { pinfl: { type: 'string' }, period: { type: 'string', description: 'Masalan "август 2026", "avgust", "2026-08". Ixtiyoriy.' } }, required: ['pinfl'] } } },
+  { type: 'function', function: { name: 'get_employee_info', description: 'Xodim haqida: lavozim, toifa, ishga qabul sanasi, ish staji, oklad.',
+      parameters: { type: 'object', properties: { pinfl: { type: 'string' } }, required: ['pinfl'] } } },
+  { type: 'function', function: { name: 'get_bonus', description: 'Xodimning qo\'shimcha to\'lovi (надбавка) — oylar va choraklar bo\'yicha, yil jami.',
+      parameters: { type: 'object', properties: { pinfl: { type: 'string' } }, required: ['pinfl'] } } },
+  { type: 'function', function: { name: 'get_employee_attendance', description: 'Xodimning bir oylik davomati (табель): ishlangan kunlar, qo\'shimcha soat, ta\'til, kasallik, прогул sanalari. month: 0=Yanvar … 11=Dekabr.',
+      parameters: { type: 'object', properties: { pinfl: { type: 'string' }, month: { type: 'integer', minimum: 0, maximum: 11 } }, required: ['pinfl', 'month'] } } },
+  { type: 'function', function: { name: 'get_daily_attendance', description: 'Butun zavod bo\'yicha bir kunlik davomat: bo\'limlar kesimida kelgan/kelmagan soni va kelmaganlar ismi. days_ago: 0=bugun, 1=kecha …',
+      parameters: { type: 'object', properties: { days_ago: { type: 'integer', minimum: 0, maximum: 60 } }, required: ['days_ago'] } } },
+  { type: 'function', function: { name: 'get_monthly_attendance', description: 'Butun zavod bo\'yicha oylik davomat yakuni: bo\'limlar kesimida xodimlar, ishlangan kunlar, прогул, ta\'til, kasallik va TOP-10 прогулчилар. months_ago: 0=shu oy, 1=o\'tgan oy …',
+      parameters: { type: 'object', properties: { months_ago: { type: 'integer', minimum: 0, maximum: 12 } }, required: ['months_ago'] } } }
+];
+function aiPeriodMatch(period, rows) { // "avgust 2026" / "август" / "2026-08" → база dagi davr qatori
+  if (!period) return rows[rows.length - 1];
+  var p = String(period).toLowerCase(), midx = -1, year = (p.match(/20\d\d/) || [''])[0];
+  var UZ = MSG.uz.months.map(function (m) { return m.toLowerCase(); }), RU = RU_MONTHS.map(function (m) { return m.toLowerCase().slice(0, 4); });
+  for (var i = 0; i < 12; i++) if (p.indexOf(UZ[i].slice(0, 4)) >= 0 || p.indexOf(RU[i]) >= 0 || p.indexOf(latToCyr(UZ[i]).slice(0, 4)) >= 0) midx = i;
+  var mNum = p.match(/(?:^|\D)(\d{1,2})(?:\D|$)/); if (midx < 0 && mNum && Number(mNum[1]) >= 1 && Number(mNum[1]) <= 12) midx = Number(mNum[1]) - 1;
+  var best = null;
+  rows.forEach(function (r) {
+    var s = String(r[COL.PERIOD]).toLowerCase();
+    var okM = midx < 0 || s.indexOf(RU[midx]) >= 0 || s.indexOf(UZ[midx].slice(0, 4)) >= 0 || new RegExp('(^|\\D)0?' + (midx + 1) + '(\\D|$)').test(s.replace(/20\d\d/, ''));
+    var okY = !year || s.indexOf(year) >= 0;
+    if (okM && okY) best = r;
+  });
+  return best;
+}
+function aiTool(name, a) {
+  switch (name) {
+    case 'find_employee': return { results: aiFindEmployees(a.query) };
+    case 'get_salary': {
+      var rows = rowsForPinfl(String(a.pinfl)); if (!rows.length) return { error: 'not_found' };
+      var r = aiPeriodMatch(a.period, rows); if (!r) return { error: 'period_not_found', available_periods: rows.slice(-12).map(function (x) { return String(x[COL.PERIOD]); }) };
+      var f = {}; SHOW.forEach(function (c) { f[c.ru] = { value: typeof r[c.i] === 'number' ? r[c.i] : parseFloat(String(r[c.i]).replace(/\s| /g, '').replace(',', '.')) || 0, unit: c.days ? 'kun' : "so'm", uz: c.uz }; });
+      return { fio: String(r[COL.FIO]), period: String(r[COL.PERIOD]), fields: f, available_periods: rows.slice(-12).map(function (x) { return String(x[COL.PERIOD]); }) };
+    }
+    case 'get_employee_info': {
+      var rr = rowsForPinfl(String(a.pinfl)); if (!rr.length) return { error: 'not_found' };
+      var x = rr[rr.length - 1], hired = parseDate(x[5]);
+      return { fio: String(x[COL.FIO]), position: String(x[4] || ''), category: String(x[3] || ''), hired: hired ? Utilities.formatDate(hired, Session.getScriptTimeZone(), 'dd.MM.yyyy') : String(x[5] || ''),
+        tenure: hired ? tenure(hired, new Date(), 'uz') : '', salary_base: x[8], as_of_period: String(x[COL.PERIOD]) };
+    }
+    case 'get_bonus': {
+      var sh = SpreadsheetApp.getActive().getSheetByName(SHEET_BONUS); if (!sh || sh.getLastRow() < 2) return { error: 'no_bonus' };
+      var vals = sh.getRange(2, 1, sh.getLastRow() - 1, 23).getValues(), row = null;
+      for (var i = 0; i < vals.length; i++) if (String(vals[i][0]).trim() === String(a.pinfl)) { row = vals[i]; break; }
+      if (!row) return { error: 'no_bonus' };
+      var months = {}; for (var q = 0; q < 4; q++) for (var m = 0; m < 3; m++) { var v = row[6 + q * 4 + m]; if (v !== '' && v !== null) months[RU_MONTHS[q * 3 + m]] = v; }
+      return { fio: String(row[1]), year: BONUS_YEAR, months: months, quarter_totals: [row[9], row[13], row[17], row[21]], year_total: row[22] };
+    }
+    case 'get_employee_attendance': {
+      var d = tabelData(String(a.pinfl), Number(a.month)); if (!d.found) return { error: 'not_in_tabel', name: d.name };
+      var absent = d.days.filter(function (x) { return x.k === 'a'; }).map(function (x) { return x.d; });
+      var filled = d.days.some(function (x) { return x.k !== 'u'; }); if (!filled) return { error: 'month_not_filled', month: RU_MONTHS[a.month] };
+      return { name: d.name, month: RU_MONTHS[a.month], worked_days: d.totalDays !== null ? d.totalDays : d.w, half_days: d.h, extra_hours: d.extra, vacation: d.v, sick: d.s, bs: d.b, absent_count: absent.length, absent_dates: absent };
+    }
+    case 'get_daily_attendance': {
+      var dd = cached('daily:' + a.days_ago, function () { return dailyData(Number(a.days_ago)); });
+      return { date: dd.date[2] + '.' + (dd.date[1] + 1) + '.' + dd.date[0], filled: dd.filled, total: dd.total,
+        sections: dd.sections.map(function (s) { return { name: s.name, total: s.n, present: s.w, absent: s.a, unmarked: s.u, absent_people: s.people.map(function (p) { return p.fio + ' (' + (p.k === 'a' ? 'прогул' : p.k === 'v' ? 'отпуск' : p.k === 's' ? 'больничный' : p.k === 'b' ? 'Бс' : p.k === 'h' ? 'полдня' : p.raw) + ')'; }) }; }) };
+    }
+    case 'get_monthly_attendance': {
+      var md = cached('monthly:' + a.months_ago, function () { return monthlyData(Number(a.months_ago)); });
+      return { month: RU_MONTHS[md.month[1]] + ' ' + md.month[0], filled: md.filled, total: md.total, sections: md.sections, top_absent: md.top };
+    }
+    default: return { error: 'unknown_tool' };
+  }
+}
+function aiSystemPrompt(L, name) {
+  var t = new Date();
+  return "Siz «SMT» zavodi rahbariyati uchun Telegram yordamchisiz. Foydalanuvchi: " + name + " (rahbar). Bugun: " + Utilities.formatDate(t, Session.getScriptTimeZone(), 'dd.MM.yyyy') + " (oy indeksi " + t.getMonth() + ", 0=Yanvar).\n" +
+    "QOIDALAR:\n1. Barcha raqam va faktlarni FAQAT asboblar (tools) natijasidan oling. Hech narsani taxmin qilmang, hisoblab chiqarmang (yig'indi kerak bo'lsa ham asbob bergan raqamlardan foydalaning).\n" +
+    "2. Xodim haqidagi har qanday savolda avval find_employee chaqiring. Bitta natija bo'lsa — davom eting. Bir nechta bo'lsa — javobni ro'yxat bilan yakunlab, qaysi biri ekanligini so'rang. Topilmasa — shuni ayting.\n" +
+    "3. Javob tili: " + (L === 'ru' ? "rus tilida" : "o'zbek tilida (lotin)") + ", agar savol boshqa tilda bo'lsa — savol tilida. Qisqa, aniq, oddiy matn (Markdown, *, # ishlatmang). Kerak bo'lsa qatorlarga ajrating.\n" +
+    "4. Summalarni «1 234 567 so'm» ko'rinishida (ming ajratgichi — bo'sh joy), kunlarni butun son bilan yozing. Oy nomlarini javob tilida yozing.\n" +
+    "5. Ovozdan tanilgan ismlar noto'g'ri yozilgan bo'lishi mumkin — find_employee taxminiy qidiradi, natijadagi F.I.O. ni javobda to'liq yozing.\n" +
+    "6. Ma'lumot yo'q bo'lsa (табель to'ldirilmagan, davr topilmadi) — buni ochiq ayting va mavjud variantlarni taklif qiling.";
+}
+function aiHistGet(uid) { var s = CacheService.getScriptCache().get('ai_h_' + uid); return s ? JSON.parse(s) : []; }
+function aiHistPut(uid, h) { try { CacheService.getScriptCache().put('ai_h_' + uid, JSON.stringify(h.slice(-AI_HIST_TURNS)), AI_HIST_SEC); } catch (e) {} }
+function openai(path, payload, isBlobForm) {
+  var opt = { method: 'post', headers: { Authorization: 'Bearer ' + prop('OPENAI_API_KEY') }, muteHttpExceptions: true };
+  if (isBlobForm) opt.payload = payload; else { opt.contentType = 'application/json'; opt.payload = JSON.stringify(payload); }
+  var res = UrlFetchApp.fetch('https://api.openai.com/v1/' + path, opt), code = res.getResponseCode(), body = res.getContentText();
+  if (code >= 300) throw new Error('OpenAI ' + path + ' HTTP ' + code + ': ' + body.slice(0, 300));
+  return JSON.parse(body);
+}
+/** Savolga javob: model → asboblar → matn. Xatolarda tashlaydi. */
+function aiAnswer(uid, question, L, name) {
+  var hist = aiHistGet(uid);
+  var messages = [{ role: 'system', content: aiSystemPrompt(L, name) }].concat(hist, [{ role: 'user', content: question }]);
+  var used = [];
+  for (var step = 0; step < AI_MAX_STEPS; step++) {
+    var r = openai('chat/completions', { model: prop('AI_MODEL') || 'gpt-4o-mini', messages: messages, tools: AI_TOOLS, tool_choice: 'auto', temperature: 0.1, max_tokens: 900 });
+    var msg = r.choices[0].message;
+    messages.push(msg);
+    if (!msg.tool_calls || !msg.tool_calls.length) {
+      var text = String(msg.content || '').trim();
+      aiHistPut(uid, hist.concat([{ role: 'user', content: question }, { role: 'assistant', content: text }]));
+      return { text: text, tools: used };
+    }
+    msg.tool_calls.forEach(function (tc) {
+      var args = {}; try { args = JSON.parse(tc.function.arguments || '{}'); } catch (e) {}
+      var out; try { out = aiTool(tc.function.name, args); } catch (e) { out = { error: String(e) }; }
+      used.push(tc.function.name);
+      messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(out) });
+    });
+  }
+  throw new Error('AI: juda ko\'p qadam');
+}
+/** Telegram ovozli xabarini matnga o'giradi */
+function aiTranscribe(fileId) {
+  var f = tg('getFile', { file_id: fileId });
+  if (!f.ok) throw new Error('getFile: ' + JSON.stringify(f));
+  var blob = UrlFetchApp.fetch('https://api.telegram.org/file/bot' + prop('BOT_TOKEN') + '/' + f.result.file_path).getBlob().setName('voice.ogg');
+  var r = openai('audio/transcriptions', { file: blob, model: prop('AI_STT_MODEL') || 'gpt-4o-mini-transcribe', prompt: 'SMT zavodi, xodimlar, oylik, davomat, табель, прогул. Familiyalar: o\'zbekcha.' }, true);
+  return String(r.text || '').trim();
+}
+/** handleMessage dan chaqiriladi: matn yoki ovoz → javob */
+function aiHandle(uid, chat, m, text, L, mgrName) {
+  var A = AI_MSG[L] || AI_MSG.uz;
+  if (!aiEnabled()) return send(chat, A.off, mainMenu(L));
+  try { tg('sendChatAction', { chat_id: chat, action: 'typing' }); } catch (e) {}
+  var question = text, heard = '';
+  try {
+    if (m.voice || m.audio) {
+      question = aiTranscribe((m.voice || m.audio).file_id);
+      if (!question) return send(chat, A.noVoice, mainMenu(L));
+      heard = A.heard + '<i>' + esc(question) + '</i>\n\n';
+    }
+    var ans = aiAnswer(uid, question, L, mgrName);
+    logAction(uid, '', 'ai:' + question.slice(0, 80) + ' [' + ans.tools.join(',') + ']');
+    return send(chat, heard + esc(ans.text), mainMenu(L));
+  } catch (e) {
+    try { send(prop('ADMIN_ID'), '⚠️ AI xatosi: ' + String(e).slice(0, 500)); } catch (x) {}
+    return send(chat, heard + A.err, mainMenu(L));
+  }
 }
