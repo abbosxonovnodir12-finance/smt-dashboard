@@ -41,7 +41,7 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-09-26.4';
+var BOT_VERSION = '2026-09-26.5';
 var API_CACHE_SEC = 900; // Mini App ma'lumotlari keshi (soniya); warmApiCache() har 5 daqiqada yangilab turadi
 var WARM_MINUTES = 5;
 var REPORT_HOUR = 10;
@@ -1254,15 +1254,15 @@ var AI_TOOLS = [
   { type: 'function', function: { name: 'get_bonus', description: 'Xodimning qo\'shimcha to\'lovi (надбавка) — oylar va choraklar bo\'yicha, yil jami.',
       parameters: { type: 'object', properties: { pinfl: { type: 'string' } }, required: ['pinfl'] } } },
   { type: 'function', function: { name: 'get_employee_attendance', description: 'Xodimning bir oylik davomati (табель): ishlangan kunlar, qo\'shimcha soat, ta\'til, kasallik, прогул sanalari. month: 0=Yanvar … 11=Dekabr.',
-      parameters: { type: 'object', properties: { pinfl: { type: 'string' }, month: { type: 'string', description: 'Oy indeksi "0".."11" (0=Yanvar, 7=Avgust, 8=Sentabr, 11=Dekabr) yoki oy nomi. Foydalanuvchi oy aytmasa — joriy oy.' } }, required: ['pinfl', 'month'] } } },
+      parameters: { type: 'object', properties: { pinfl: { type: 'string' }, month: { type: 'string', description: 'Oy raqami "1".."12" (1=Yanvar, 8=Avgust, 9=Sentabr, 12=Dekabr) yoki oy nomi. Foydalanuvchi oy aytmasa — joriy oy.' } }, required: ['pinfl', 'month'] } } },
   { type: 'function', function: { name: 'get_daily_attendance', description: 'Butun zavod bo\'yicha bir kunlik davomat: bo\'limlar kesimida kelgan/kelmagan soni va kelmaganlar ismi. days_ago: 0=bugun, 1=kecha …',
       parameters: { type: 'object', properties: { days_ago: { type: 'integer', minimum: 0, maximum: 60 } }, required: ['days_ago'] } } },
   { type: 'function', function: { name: 'get_monthly_attendance', description: 'Butun zavod bo\'yicha oylik davomat yakuni: bo\'limlar kesimida xodimlar, ishlangan kunlar, прогул, ta\'til, kasallik va TOP-10 прогулчилар. months_ago: 0=shu oy, 1=o\'tgan oy …',
       parameters: { type: 'object', properties: { months_ago: { type: 'integer', minimum: 0, maximum: 12 } }, required: ['months_ago'] } } }
 ];
-function aiMonthIndex(m) { // 0..11, oy nomi (uz/ru/lotin) yoki raqam
-  if (typeof m === 'number' && m >= 0 && m <= 11) return m;
-  var p = String(m || '').toLowerCase().trim(); if (/^\d{1,2}$/.test(p)) { var n = Number(p); return n >= 0 && n <= 11 ? n : (n === 12 ? 11 : -1); }
+function aiMonthIndex(m) { // model 1..12 beradi (1=Yanvar, 9=Sentabr) yoki oy nomi → ichki indeks 0..11
+  if (typeof m === 'number') return m >= 1 && m <= 12 ? m - 1 : -1;
+  var p = String(m || '').toLowerCase().trim(); if (/^\d{1,2}$/.test(p)) { var n = Number(p); return n >= 1 && n <= 12 ? n - 1 : -1; }
   for (var i = 0; i < 12; i++) { var uz = MSG.uz.months[i].toLowerCase(); if (p.indexOf(uz.slice(0, 4)) >= 0 || p.indexOf(RU_MONTHS[i].toLowerCase().slice(0, 4)) >= 0 || p.indexOf(latToCyr(uz).slice(0, 4)) >= 0) return i; }
   return -1;
 }
@@ -1305,7 +1305,7 @@ function aiTool(name, a) {
       return { fio: String(row[1]), year: BONUS_YEAR, months: months, quarter_totals: [row[9], row[13], row[17], row[21]], year_total: row[22] };
     }
     case 'get_employee_attendance': {
-      var mi = aiMonthIndex(a.month); if (mi < 0) return { error: 'bad_month', hint: 'month: 0=Yanvar/Январь … 11=Dekabr/Декабрь yoki oy nomi' };
+      var mi = aiMonthIndex(a.month); if (mi < 0) return { error: 'bad_month', hint: 'month: 1=Yanvar … 12=Dekabr yoki oy nomi' };
       var avail = cached('months', function () { return tabelMonthSheets(tabelFile()).map(function (m) { return m.idx; }); });
       if (avail.indexOf(mi) < 0) return { error: 'month_not_in_tabel', month: RU_MONTHS[mi], available_months: avail.map(function (i) { return RU_MONTHS[i]; }) };
       var d = tabelData(String(a.pinfl), mi); if (!d.found) return { error: 'not_in_tabel', name: d.name, hint: 'Xodim табельда shu ism bilan topilmadi (ФИО табель varag\'ini tekshiring)' };
@@ -1327,14 +1327,14 @@ function aiTool(name, a) {
 }
 function aiSystemPrompt(L, name) {
   var t = new Date();
-  return "Siz «SMT» zavodi rahbariyati uchun Telegram yordamchisiz. Foydalanuvchi: " + name + " (rahbar). Bugun: " + Utilities.formatDate(t, Session.getScriptTimeZone(), 'dd.MM.yyyy') + " (oy indeksi " + t.getMonth() + ", 0=Yanvar).\n" +
+  return "Siz «SMT» zavodi rahbariyati uchun Telegram yordamchisiz. Foydalanuvchi: " + name + " (rahbar). Bugun: " + Utilities.formatDate(t, Session.getScriptTimeZone(), 'dd.MM.yyyy') + " (joriy oy raqami: " + (t.getMonth() + 1) + ").\n" +
     "QOIDALAR:\n1. Barcha raqam va faktlarni FAQAT asboblar (tools) natijasidan oling. Hech narsani taxmin qilmang, hisoblab chiqarmang (yig'indi kerak bo'lsa ham asbob bergan raqamlardan foydalaning).\n" +
     "2. Xodim haqidagi har qanday savolda avval find_employee chaqiring. Bitta natija bo'lsa — davom eting. Bir nechta bo'lsa — javobni ro'yxat bilan yakunlab, qaysi biri ekanligini so'rang. Topilmasa — shuni ayting.\n" +
     "3. Javob tili: " + (L === 'ru' ? "rus tilida" : "o'zbek tilida (lotin)") + ", agar savol boshqa tilda bo'lsa — savol tilida. Qisqa, aniq, oddiy matn (Markdown, *, # ishlatmang). Kerak bo'lsa qatorlarga ajrating.\n" +
     "4. Summalarni «1 234 567 so'm» ko'rinishida (ming ajratgichi — bo'sh joy), kunlarni butun son bilan yozing. Oy nomlarini javob tilida yozing.\n" +
     "5. Ovozdan tanilgan ismlar noto'g'ri yozilgan bo'lishi mumkin — find_employee taxminiy qidiradi, natijadagi F.I.O. ni javobda to'liq yozing.\n" +
     "6. Ma'lumot yo'q bo'lsa (табель to'ldirilmagan, davr topilmadi) — buni ochiq ayting va mavjud variantlarni taklif qiling.\n" +
-    "7. Oy indekslari: Yanvar/Январь=0, Fevral=1, Mart=2, Aprel=3, May=4, Iyun=5, Iyul/Июль=6, Avgust/Август=7, Sentabr/Сентябрь=8, Oktabr=9, Noyabr=10, Dekabr=11.\n" +
+    "7. Oy raqamlari odatdagidek: Yanvar=1 … Avgust=8, Sentabr=9, Oktabr=10, Dekabr=12. get_employee_attendance ga oy raqamini yoki nomini bering.\n" +
     "8. Asbob error qaytarsa — javobda error kodini emas, sababini odam tilida yozing (masalan «Avgust uchun табель hali to'ldirilmagan»). «Topilmadi» deb aytishdan oldin find_employee natijasidagi pinfl ni to'g'ri uzatganingizga ishonch hosil qiling.";
 }
 function aiHistGet(uid) { var s = CacheService.getScriptCache().get('ai_h_' + uid); return s ? JSON.parse(s) : []; }
@@ -1364,8 +1364,7 @@ function aiAnswer(uid, question, L, name) {
       var args = {}; try { args = JSON.parse(tc.function.arguments || '{}'); } catch (e) {}
       var out; try { out = aiTool(tc.function.name, args); } catch (e) { out = { error: String(e) }; }
       used.push(tc.function.name + '(' + JSON.stringify(args).slice(0, 60) + ')' + (out && out.error ? '→' + out.error : ''));
-      if (tc.function.name === 'find_employee') cands = out.results || null;
-      else if (args.pinfl) cands = null; // xodim aniqlangan — tanlov kerak emas
+      cands = tc.function.name === 'find_employee' ? (out.results || null) : null; // tugmalar faqat javob aniqlashtirish so'rovi bo'lsa (oxirgi asbob — qidiruv)
       messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(out) });
     });
   }
