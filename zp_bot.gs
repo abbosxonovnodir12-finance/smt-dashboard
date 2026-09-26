@@ -41,7 +41,7 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-09-26.3';
+var BOT_VERSION = '2026-09-26.4';
 var API_CACHE_SEC = 900; // Mini App ma'lumotlari keshi (soniya); warmApiCache() har 5 daqiqada yangilab turadi
 var WARM_MINUTES = 5;
 var REPORT_HOUR = 10;
@@ -871,7 +871,7 @@ function normName(s) {
 function tabelFile() {
   var id = prop('TABEL_ID');
   if (!id) throw new Error('TABEL_ID script property yo\'q');
-  return SpreadsheetApp.openById(id);
+  try { return SpreadsheetApp.openById(id); } catch (e) { Utilities.sleep(800); return SpreadsheetApp.openById(id); } // vaqtinchalik xatoda qayta urinish
 }
 function tabelMonthSheets(ss) { // [{name, idx}] mavjud oylar, oxirgisi birinchi
   var out = [];
@@ -896,7 +896,17 @@ function findTabelRow(sheet, name) {
     if (i > 1 && String(vals[i][TAB.FIO]).indexOf('Ф.И.О') === 0) break; // pastdagi yakun jadvali
     if (normName(vals[i][TAB.FIO]) === n) return vals[i];
   }
-  return null;
+  // Aniq moslik yo'q — imlo/alifbo farqlariga chidamli qidiruv (faqat YAGONA ishonchli nomzod bo'lsa)
+  var nk = nameKey(name), qTok = String(name).split(/[\s,.]+/).map(nameKey).filter(Boolean), best = null, bestScore = 0, ties = 0;
+  for (var j = 1; j < vals.length; j++) {
+    if (j > 1 && String(vals[j][TAB.FIO]).indexOf('Ф.И.О') === 0) break;
+    var fio = String(vals[j][TAB.FIO] || ''); if (!fio.trim()) continue;
+    if (nameKey(fio) === nk) return vals[j]; // faqat alifbo/imlo farqi
+    var fTok = fio.split(/[\s,.]+/).map(nameKey).filter(Boolean), score = 0;
+    qTok.forEach(function (q) { var b = 0; fTok.forEach(function (f) { var sc = f === q ? 3 : (q.length >= 3 && (f.indexOf(q) === 0 || q.indexOf(f) === 0)) ? 2 : (q.length >= 5 && f.length >= 5 && q[0] === f[0] && lev(q, f) <= (Math.min(q.length, f.length) >= 7 ? 2 : 1)) ? 1 : 0; if (sc > b) b = sc; }); score += b; });
+    if (score > bestScore) { bestScore = score; best = vals[j]; ties = 0; } else if (score === bestScore && score > 0) ties++;
+  }
+  return (bestScore >= 4 && ties === 0) ? best : null; // familiya + ism mos, va bitta nomzod
 }
 function tabelMonthsKb(L, prefix) {
   var months = tabelMonthSheets(tabelFile());
@@ -1244,12 +1254,18 @@ var AI_TOOLS = [
   { type: 'function', function: { name: 'get_bonus', description: 'Xodimning qo\'shimcha to\'lovi (надбавка) — oylar va choraklar bo\'yicha, yil jami.',
       parameters: { type: 'object', properties: { pinfl: { type: 'string' } }, required: ['pinfl'] } } },
   { type: 'function', function: { name: 'get_employee_attendance', description: 'Xodimning bir oylik davomati (табель): ishlangan kunlar, qo\'shimcha soat, ta\'til, kasallik, прогул sanalari. month: 0=Yanvar … 11=Dekabr.',
-      parameters: { type: 'object', properties: { pinfl: { type: 'string' }, month: { type: 'integer', minimum: 0, maximum: 11 } }, required: ['pinfl', 'month'] } } },
+      parameters: { type: 'object', properties: { pinfl: { type: 'string' }, month: { type: 'string', description: 'Oy indeksi "0".."11" (0=Yanvar, 7=Avgust, 8=Sentabr, 11=Dekabr) yoki oy nomi. Foydalanuvchi oy aytmasa — joriy oy.' } }, required: ['pinfl', 'month'] } } },
   { type: 'function', function: { name: 'get_daily_attendance', description: 'Butun zavod bo\'yicha bir kunlik davomat: bo\'limlar kesimida kelgan/kelmagan soni va kelmaganlar ismi. days_ago: 0=bugun, 1=kecha …',
       parameters: { type: 'object', properties: { days_ago: { type: 'integer', minimum: 0, maximum: 60 } }, required: ['days_ago'] } } },
   { type: 'function', function: { name: 'get_monthly_attendance', description: 'Butun zavod bo\'yicha oylik davomat yakuni: bo\'limlar kesimida xodimlar, ishlangan kunlar, прогул, ta\'til, kasallik va TOP-10 прогулчилар. months_ago: 0=shu oy, 1=o\'tgan oy …',
       parameters: { type: 'object', properties: { months_ago: { type: 'integer', minimum: 0, maximum: 12 } }, required: ['months_ago'] } } }
 ];
+function aiMonthIndex(m) { // 0..11, oy nomi (uz/ru/lotin) yoki raqam
+  if (typeof m === 'number' && m >= 0 && m <= 11) return m;
+  var p = String(m || '').toLowerCase().trim(); if (/^\d{1,2}$/.test(p)) { var n = Number(p); return n >= 0 && n <= 11 ? n : (n === 12 ? 11 : -1); }
+  for (var i = 0; i < 12; i++) { var uz = MSG.uz.months[i].toLowerCase(); if (p.indexOf(uz.slice(0, 4)) >= 0 || p.indexOf(RU_MONTHS[i].toLowerCase().slice(0, 4)) >= 0 || p.indexOf(latToCyr(uz).slice(0, 4)) >= 0) return i; }
+  return -1;
+}
 function aiPeriodMatch(period, rows) { // "avgust 2026" / "август" / "2026-08" → база dagi davr qatori
   if (!period) return rows[rows.length - 1];
   var p = String(period).toLowerCase(), midx = -1, year = (p.match(/20\d\d/) || [''])[0];
@@ -1289,10 +1305,13 @@ function aiTool(name, a) {
       return { fio: String(row[1]), year: BONUS_YEAR, months: months, quarter_totals: [row[9], row[13], row[17], row[21]], year_total: row[22] };
     }
     case 'get_employee_attendance': {
-      var d = tabelData(String(a.pinfl), Number(a.month)); if (!d.found) return { error: 'not_in_tabel', name: d.name };
+      var mi = aiMonthIndex(a.month); if (mi < 0) return { error: 'bad_month', hint: 'month: 0=Yanvar/Январь … 11=Dekabr/Декабрь yoki oy nomi' };
+      var avail = cached('months', function () { return tabelMonthSheets(tabelFile()).map(function (m) { return m.idx; }); });
+      if (avail.indexOf(mi) < 0) return { error: 'month_not_in_tabel', month: RU_MONTHS[mi], available_months: avail.map(function (i) { return RU_MONTHS[i]; }) };
+      var d = tabelData(String(a.pinfl), mi); if (!d.found) return { error: 'not_in_tabel', name: d.name, hint: 'Xodim табельда shu ism bilan topilmadi (ФИО табель varag\'ini tekshiring)' };
       var absent = d.days.filter(function (x) { return x.k === 'a'; }).map(function (x) { return x.d; });
-      var filled = d.days.some(function (x) { return x.k !== 'u'; }); if (!filled) return { error: 'month_not_filled', month: RU_MONTHS[a.month] };
-      return { name: d.name, month: RU_MONTHS[a.month], worked_days: d.totalDays !== null ? d.totalDays : d.w, half_days: d.h, extra_hours: d.extra, vacation: d.v, sick: d.s, bs: d.b, absent_count: absent.length, absent_dates: absent };
+      var filled = d.days.some(function (x) { return x.k !== 'u'; }); if (!filled) return { error: 'month_not_filled', month: RU_MONTHS[mi] };
+      return { name: d.name, month: RU_MONTHS[mi], worked_days: d.totalDays !== null ? d.totalDays : d.w, half_days: d.h, extra_hours: d.extra, vacation: d.v, sick: d.s, bs: d.b, absent_count: absent.length, absent_dates: absent };
     }
     case 'get_daily_attendance': {
       var dd = cached('daily:' + a.days_ago, function () { return dailyData(Number(a.days_ago)); });
@@ -1314,7 +1333,9 @@ function aiSystemPrompt(L, name) {
     "3. Javob tili: " + (L === 'ru' ? "rus tilida" : "o'zbek tilida (lotin)") + ", agar savol boshqa tilda bo'lsa — savol tilida. Qisqa, aniq, oddiy matn (Markdown, *, # ishlatmang). Kerak bo'lsa qatorlarga ajrating.\n" +
     "4. Summalarni «1 234 567 so'm» ko'rinishida (ming ajratgichi — bo'sh joy), kunlarni butun son bilan yozing. Oy nomlarini javob tilida yozing.\n" +
     "5. Ovozdan tanilgan ismlar noto'g'ri yozilgan bo'lishi mumkin — find_employee taxminiy qidiradi, natijadagi F.I.O. ni javobda to'liq yozing.\n" +
-    "6. Ma'lumot yo'q bo'lsa (табель to'ldirilmagan, davr topilmadi) — buni ochiq ayting va mavjud variantlarni taklif qiling.";
+    "6. Ma'lumot yo'q bo'lsa (табель to'ldirilmagan, davr topilmadi) — buni ochiq ayting va mavjud variantlarni taklif qiling.\n" +
+    "7. Oy indekslari: Yanvar/Январь=0, Fevral=1, Mart=2, Aprel=3, May=4, Iyun=5, Iyul/Июль=6, Avgust/Август=7, Sentabr/Сентябрь=8, Oktabr=9, Noyabr=10, Dekabr=11.\n" +
+    "8. Asbob error qaytarsa — javobda error kodini emas, sababini odam tilida yozing (masalan «Avgust uchun табель hali to'ldirilmagan»). «Topilmadi» deb aytishdan oldin find_employee natijasidagi pinfl ni to'g'ri uzatganingizga ishonch hosil qiling.";
 }
 function aiHistGet(uid) { var s = CacheService.getScriptCache().get('ai_h_' + uid); return s ? JSON.parse(s) : []; }
 function aiHistPut(uid, h) { try { CacheService.getScriptCache().put('ai_h_' + uid, JSON.stringify(h.slice(-AI_HIST_TURNS)), AI_HIST_SEC); } catch (e) {} }
@@ -1331,7 +1352,7 @@ function aiAnswer(uid, question, L, name) {
   var messages = [{ role: 'system', content: aiSystemPrompt(L, name) }].concat(hist, [{ role: 'user', content: question }]);
   var used = [], cands = null; // bir nechta xodim topilsa — tugma sifatida taklif qilamiz
   for (var step = 0; step < AI_MAX_STEPS; step++) {
-    var r = openai('chat/completions', { model: prop('AI_MODEL') || 'gpt-4o-mini', messages: messages, tools: AI_TOOLS, tool_choice: 'auto', temperature: 0.1, max_tokens: 900 });
+    var r = openai('chat/completions', { model: prop('AI_MODEL') || 'gpt-4o-mini', messages: messages, tools: AI_TOOLS, tool_choice: 'auto', temperature: 0, max_tokens: 900 });
     var msg = r.choices[0].message;
     messages.push(msg);
     if (!msg.tool_calls || !msg.tool_calls.length) {
@@ -1342,7 +1363,7 @@ function aiAnswer(uid, question, L, name) {
     msg.tool_calls.forEach(function (tc) {
       var args = {}; try { args = JSON.parse(tc.function.arguments || '{}'); } catch (e) {}
       var out; try { out = aiTool(tc.function.name, args); } catch (e) { out = { error: String(e) }; }
-      used.push(tc.function.name);
+      used.push(tc.function.name + '(' + JSON.stringify(args).slice(0, 60) + ')' + (out && out.error ? '→' + out.error : ''));
       if (tc.function.name === 'find_employee') cands = out.results || null;
       else if (args.pinfl) cands = null; // xodim aniqlangan — tanlov kerak emas
       messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(out) });
