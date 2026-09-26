@@ -8,7 +8,8 @@
  *       BOT_TOKEN  = BotFather'dan olingan token
  *       ADMIN_ID   = sizning Telegram ID (raqam). Bilmasangiz: botga /id yozing.
  *  4. Deploy → New deployment → Web app: Execute as "Me", Access "Anyone". URL ni nusxalang.
- *  5. Script properties'ga WEBAPP_URL = shu URL ni yozing, keyin setWebhook() ni ishga tushiring.
+ *  5. Script properties'ga WEBAPP_URL = shu URL ni yozing, keyin setWebhook() ni ishga tushiring
+ *     (u WEBHOOK_SECRET maxfiy kalitini yaratib webhook URL ga qo'shadi — begona so'rovlardan himoya).
  *  6. Telegram varaqiga ПИНФЛ + Telefon (kadrlar jadvalidan) ni to'ldiring.
  *  7. (Ixtiyoriy) AI yordamchi: Script properties'ga OPENAI_API_KEY qo'shing — rahbarlar botga erkin savol yoki ovoz yuborishi mumkin bo'ladi.
  */
@@ -20,7 +21,12 @@ var SHEET_BONUS = 'надбавка';   // qo'shimcha to'lov varag'i (A ПИНФ
 var BONUS_YEAR = '2026';
 var SHEET_NAMES = 'ФИО табель';    // ПИНФЛ -> Табельдаги Ф.И.О. mosligi
 // Табель: Script property TABEL_ID (fayl ID). Har oy = varaq. B ФИО, D dan boshlab har kun 2 ustun (belgi, qo'shimcha soat)
-var TAB = { FIO: 1, DAY0: 3, EXTRA: 65, DAYS: 66 };
+var TAB = { FIO: 1, DAY0: 3 }; // EXTRA/DAYS ustunlari oy uzunligiga bog'liq — tabCols(midx) orqali olinadi
+var TABEL_YEAR = 2026; // Табель fayli qaysi yil uchun (TABEL_ID shu yilga tegishli)
+function daysInMonth(midx) { return new Date(TABEL_YEAR, midx + 1, 0).getDate(); }
+function tabCols(midx) { var nd = daysInMonth(midx); return { nd: nd, EXTRA: TAB.DAY0 + nd * 2, DAYS: TAB.DAY0 + nd * 2 + 1 }; }
+function tabelSheetFor(year, midx) { return year === TABEL_YEAR ? tabelFile().getSheetByName(RU_MONTHS[midx]) : null; } // boshqa yil — Табель fayli yo'q
+function tabValues(sheet) { return sheet.getRange(1, 1, sheet.getLastRow(), Math.max(sheet.getLastColumn(), TAB.DAY0 + 2)).getValues(); }
 var RU_MONTHS = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
 
 // база: A Период, B ПИНФЛ, ... ko'rsatiladigan ustunlar (0-indeks):
@@ -41,7 +47,7 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-09-26.5';
+var BOT_VERSION = '2026-09-27.1';
 var API_CACHE_SEC = 900; // Mini App ma'lumotlari keshi (soniya); warmApiCache() har 5 daqiqada yangilab turadi
 var WARM_MINUTES = 5;
 var REPORT_HOUR = 10;
@@ -163,7 +169,10 @@ function setWebhook() {
   var p = PropertiesService.getScriptProperties();
   var url = p.getProperty('WEBAPP_URL');
   if (!url) throw new Error('WEBAPP_URL script property yo\'q');
-  var r = tg('setWebhook', { url: url, allowed_updates: ['message', 'callback_query'] });
+  // Webhook URL ga maxfiy kalit qo'shiladi — begona POST so'rovlar Telegram update sifatida qabul qilinmaydi
+  var secret = p.getProperty('WEBHOOK_SECRET');
+  if (!secret) { secret = Utilities.getUuid().replace(/-/g, ''); p.setProperty('WEBHOOK_SECRET', secret); }
+  var r = tg('setWebhook', { url: url + (url.indexOf('?') >= 0 ? '&' : '?') + 'k=' + secret, allowed_updates: ['message', 'callback_query'] });
   Logger.log(r);
 }
 
@@ -190,9 +199,27 @@ function tg(method, payload) {
   throw lastErr;
 }
 function send(chatId, text, kb) {
-  var p = { chat_id: chatId, text: text, parse_mode: 'HTML' };
-  if (kb) p.reply_markup = kb;
-  return tg('sendMessage', p);
+  text = String(text == null ? '' : text); if (!text) text = '—';
+  var parts = splitMessage(text, 3900), res = null; // Telegram limiti 4096 belgi
+  for (var i = 0; i < parts.length; i++) {
+    var p = { chat_id: chatId, text: parts[i], parse_mode: 'HTML' };
+    if (kb && i === parts.length - 1) p.reply_markup = kb;
+    res = tg('sendMessage', p);
+    if (!res || !res.ok) {
+      Logger.log('sendMessage xato: ' + JSON.stringify(res));
+      if (res && res.description && /parse entities/.test(res.description)) { delete p.parse_mode; p.text = parts[i].replace(/<[^>]+>/g, ''); res = tg('sendMessage', p); } // HTML buzilgan bo'lsa — oddiy matn
+    }
+  }
+  return res;
+}
+function splitMessage(text, max) { // qatorlar bo'yicha bo'ladi
+  if (text.length <= max) return [text];
+  var out = [], cur = '';
+  text.split('\n').forEach(function (line) {
+    if ((cur + '\n' + line).length > max && cur) { out.push(cur); cur = line; } else cur = cur ? cur + '\n' + line : line;
+  });
+  if (cur) out.push(cur);
+  return out;
 }
 function removeKb() { return { remove_keyboard: true }; }
 
@@ -200,7 +227,11 @@ function removeKb() { return { remove_keyboard: true }; }
 function doPost(e) {
   try {
     var upd = JSON.parse(e.postData.contents);
-    if (upd && upd.api) return apiResponse(handleApi(upd)); // Mini App so'rovi
+    if (upd && upd.api) return apiResponse(handleApi(upd)); // Mini App so'rovi (initData HMAC bilan tekshiriladi)
+    // Telegram update: URL dagi maxfiy kalit mos bo'lishi shart (setWebhook() o'rnatadi)
+    var secret = prop('WEBHOOK_SECRET');
+    if (secret && !(e.parameter && e.parameter.k === secret)) return HtmlService.createHtmlOutput('Forbidden');
+    if (upd.message && upd.message.chat && upd.message.from && String(upd.message.chat.id) !== String(upd.message.from.id)) return HtmlService.createHtmlOutput('OK'); // faqat shaxsiy chat
     // Telegram bir xil update'ni qayta yuborsa — e'tiborsiz qoldiramiz
     var cache = CacheService.getScriptCache(), key = 'upd_' + upd.update_id;
     if (cache.get(key)) return HtmlService.createHtmlOutput('OK');
@@ -209,7 +240,7 @@ function doPost(e) {
     else if (upd.callback_query) handleCallback(upd.callback_query);
   } catch (err) {
     Logger.log(err);
-    try { send(prop('ADMIN_ID'), '⚠️ Bot error: ' + err); } catch (x) {}
+    try { send(prop('ADMIN_ID'), '⚠️ Bot error: ' + esc(String(err))); } catch (x) {}
   }
   return HtmlService.createHtmlOutput('OK');
 }
@@ -255,7 +286,7 @@ function langOf(rec, st) { return (rec && rec.v[T.LANG]) || (st && st.lang) || '
 function isManager(rec, uid) {
   if (String(uid) === String(prop('ADMIN_ID'))) return true;
   var r = rec ? String(rec.v[T.ROLE] || '').trim().toLowerCase() : '';
-  return r !== '';
+  return r !== '' && rec.v[T.STATUS] === 'active'; // faqat tasdiqlangan (active) rahbar
 }
 function mainMenu(L, mgr) {
   if (mgr === undefined) mgr = MGR;
@@ -329,7 +360,7 @@ function doBroadcast(uid, chat, msgId) {
   var ok = 0, fail = 0;
   tgRows().forEach(function (r) {
     if (r[T.STATUS] !== 'active' || !r[T.TG_ID]) return;
-    var res = send(String(r[T.TG_ID]), '📣 ' + esc(text));
+    var res = null; try { res = send(String(r[T.TG_ID]), '📣 ' + esc(text)); } catch (e) {}
     if (res && res.ok) ok++; else fail++;
   });
   logAction(uid, '', 'broadcast:' + ok + '/' + (ok + fail));
@@ -377,6 +408,7 @@ function handleMessage(m) {
   }
   // Ariza/qidiruv bosqichida menyu tugmasi yoki buyruq bosilsa — bosqichni tark etib, odatdagidek ishlaymiz
   if ((st.step === 'request' || st.step === 'mgr_find') && (isMenuText(text) || text.charAt(0) === '/')) { clearState(uid); st = {}; }
+  if (MGR && (st.step === 'pinfl' || st.step === 'lang') && isMenuText(text)) { clearState(uid); st = {}; } // ro'yxatdan o'tmagan admin menyu tugmasini bossa — qotib qolmasin
 
   // Ro'yxatdan o'tish bosqichlari
   if (st.step === 'pinfl') return stepPinfl(uid, chat, text, st);
@@ -452,6 +484,9 @@ function stepPhone(uid, chat, m, st) {
   var username = m.from.username ? '@' + m.from.username : '';
   var sh = tgSheet();
   var ex = findByPinfl(pinfl);
+  if (ex && ex.v[T.TG_ID] && String(ex.v[T.TG_ID]) !== String(uid) && ex.v[T.STATUS] !== '') { // shu orada boshqa akkaunt bog'lab olgan
+    clearState(uid); logAction(uid, pinfl, 'pinfl_taken'); return send(chat, MSG[L].taken, removeKb());
+  }
   var hrPhone = ex ? normPhone(ex.v[T.HR_PHONE]) : '';
   var status = (hrPhone && hrPhone === phone) ? 'active' : 'pending';
   var row = [pinfl, ex ? ex.v[T.HR_PHONE] : '', String(uid), m.contact.phone_number, username, name, status, L, new Date()];
@@ -462,9 +497,9 @@ function stepPhone(uid, chat, m, st) {
   if (status === 'active') return send(chat, MSG[L].activated, mainMenu(L));
   send(chat, MSG[L].pending, removeKb());
   send(prop('ADMIN_ID'),
-    '🆕 <b>Bog\'lash so\'rovi</b>\nПИНФЛ: <code>' + pinfl + '</code>\nF.I.O. (база): ' + st.fio +
-    '\nTelegram: ' + name + ' ' + username + ' (ID ' + uid + ')\nTelefon: ' + m.contact.phone_number +
-    '\nKadrlar tel: ' + (ex ? ex.v[T.HR_PHONE] : '—'),
+    '🆕 <b>Bog\'lash so\'rovi</b>\nПИНФЛ: <code>' + pinfl + '</code>\nF.I.O. (база): ' + esc(st.fio) +
+    '\nTelegram: ' + esc(name) + ' ' + esc(username) + ' (ID ' + uid + ')\nTelefon: ' + esc(m.contact.phone_number) +
+    '\nKadrlar tel: ' + esc(ex ? ex.v[T.HR_PHONE] : '—'),
     { inline_keyboard: [[{ text: '✅ Tasdiqlash', callback_data: 'ok:' + pinfl + ':' + uid }, { text: '❌ Rad etish', callback_data: 'no:' + pinfl + ':' + uid }]] });
 }
 
@@ -556,6 +591,7 @@ function adminDecide(parts, chat, q) {
       tg('editMessageText', { chat_id: chat, message_id: q.message.message_id, text: q.message.text + '\n\n✅ Tasdiqlandi' });
     } else {
       tgSheet().getRange(ex.row, T.TG_ID + 1, 1, 6).setValues([['', '', '', '', '', '']]);
+      try { CacheService.getScriptCache().remove('api_who:' + empId); } catch (e) {}
       send(empId, MSG[L2].rejected);
       logAction(empId, pinfl, 'rejected');
       tg('editMessageText', { chat_id: chat, message_id: q.message.message_id, text: q.message.text + '\n\n❌ Rad etildi' });
@@ -569,6 +605,7 @@ function adminUnlink(chat, text) {
   if (!ex || !ex.v[T.TG_ID]) return send(chat, 'Bog\'lanish topilmadi: ' + pinfl);
   var empId = ex.v[T.TG_ID], L = ex.v[T.LANG] || 'uz';
   tgSheet().getRange(ex.row, T.TG_ID + 1, 1, 6).setValues([['', '', '', '', '', '']]);
+  try { CacheService.getScriptCache().remove('api_who:' + empId); } catch (e) {}
   logAction(empId, pinfl, 'unlinked_by_admin');
   try { send(empId, MSG[L].unlinked, removeKb()); } catch (e) {}
   return send(chat, '🔓 Bog\'lanish bekor qilindi: ' + pinfl);
@@ -613,17 +650,9 @@ function showReport(chat, rec, idx) {
 
 // ---------- Rahbar: xodim qidirish ----------
 function stepMgrFind(uid, chat, text, L) {
-  var q = normName(text);
-  if (q.length < 3) return send(chat, MSG[L].ask_name, backKb(L));
-  var sh = SpreadsheetApp.getActive().getSheetByName(SHEET_BASE);
-  var vals = sh.getRange(2, COL.PINFL + 1, sh.getLastRow() - 1, 2).getValues();
-  var seen = {}, found = [];
-  for (var i = 0; i < vals.length; i++) {
-    var p = String(vals[i][0]).trim(), fio = String(vals[i][1]).trim();
-    if (seen[p]) continue;
-    if (normName(fio).indexOf(q) >= 0) { seen[p] = 1; found.push({ p: p, fio: fio }); }
-  }
-  if (!found.length) return send(chat, MSG[L].no_match);
+  if (normName(text).length < 3) return send(chat, MSG[L].ask_name, backKb(L));
+  var found = aiFindEmployees(text).map(function (e) { return { p: e.pinfl, fio: e.fio }; }); // lotin/kirill, imlo xatosiga chidamli
+  if (!found.length) return send(chat, MSG[L].no_match, backKb(L));
   clearState(uid);
   logAction(uid, '', 'mgr_search:' + text);
   var kb = found.slice(0, 10).map(function (f) { return [{ text: f.fio, callback_data: 'mp:' + f.p }]; });
@@ -631,9 +660,10 @@ function stepMgrFind(uid, chat, text, L) {
 }
 
 // ---------- Rahbar: kunlik davomat ----------
-function isSectionHeader(row) {
+function isSectionHeader(row, midx) {
   if (row[0] !== '' || !row[TAB.FIO] || row[2] !== '') return false;
-  for (var d = 0; d < 62; d++) if (row[TAB.DAY0 + d] !== '') return false;
+  var n = (midx === undefined ? 31 : daysInMonth(midx)) * 2;
+  for (var d = 0; d < n; d++) if (row[TAB.DAY0 + d] !== '') return false;
   var t = String(row[TAB.FIO]).trim();
   return t.indexOf(':') >= 0 || t.split(/\s+/).length <= 2;
 }
@@ -641,17 +671,17 @@ function buildDailyReport(L, daysAgo) {
   try {
     var dt = new Date(); dt.setDate(dt.getDate() - (daysAgo || 0));
     var midx = dt.getMonth(), day = dt.getDate();
-    var sheet = tabelFile().getSheetByName(RU_MONTHS[midx]);
+    var sheet = tabelSheetFor(dt.getFullYear(), midx);
     var title = '<b>' + MSG[L].daily_title + ' — ' + (day < 10 ? '0' : '') + day + '.' + (midx < 9 ? '0' : '') + (midx + 1) + '.' + dt.getFullYear() + '</b>';
     if (!sheet) return title + '\n' + MSG[L].d_empty;
-    var vals = sheet.getRange(1, 1, sheet.getLastRow(), 70).getValues();
+    var vals = tabValues(sheet);
     var col = TAB.DAY0 + (day - 1) * 2;
     var sections = [], cur = null, tot = { p: 0, a: 0, u: 0, n: 0 }, any = false;
     for (var i = 1; i < vals.length; i++) {
       var r = vals[i];
       if (i > 1 && String(r[TAB.FIO]).indexOf('Ф.И.О') === 0) break;
       if (!r[TAB.FIO]) continue;
-      if (isSectionHeader(r)) { cur = { name: String(r[TAB.FIO]).replace(/\s+/g, ' ').trim(), p: 0, n: 0, u: 0, abs: [] }; sections.push(cur); continue; }
+      if (isSectionHeader(r, midx)) { cur = { name: String(r[TAB.FIO]).replace(/\s+/g, ' ').trim(), p: 0, n: 0, u: 0, abs: [] }; sections.push(cur); continue; }
       if (!cur) { cur = { name: '—', p: 0, n: 0, u: 0, abs: [] }; sections.push(cur); }
       var mark = r[col], m = String(mark).trim().toLowerCase(), fio = String(r[TAB.FIO]).trim();
       cur.n++; tot.n++;
@@ -673,7 +703,7 @@ function buildDailyReport(L, daysAgo) {
     });
     return lines.join('\n');
   } catch (e) {
-    send(prop('ADMIN_ID'), '⚠️ Kunlik hisobot xatosi: ' + e);
+    send(prop('ADMIN_ID'), '⚠️ Kunlik hisobot xatosi: ' + esc(String(e)));
     return MSG[L].tabel_err;
   }
 }
@@ -682,18 +712,18 @@ function buildMonthlyReport(L, monthsAgo) {
   try {
     var dt = new Date(); dt.setDate(1); dt.setMonth(dt.getMonth() - (monthsAgo || 0));
     var midx = dt.getMonth(), title = '<b>' + MSG[L].m_title + ' — ' + MSG[L].months[midx] + ' ' + dt.getFullYear() + '</b>';
-    var sheet = tabelFile().getSheetByName(RU_MONTHS[midx]);
+    var sheet = tabelSheetFor(dt.getFullYear(), midx);
     if (!sheet) return title + '\n' + MSG[L].tabel_nodata;
-    var vals = sheet.getRange(1, 1, sheet.getLastRow(), 70).getValues();
+    var vals = tabValues(sheet), nd = daysInMonth(midx);
     var sections = [], cur = null, emps = [], tot = { n: 0, w: 0, a: 0, v: 0, s: 0 }, any = false;
     for (var i = 1; i < vals.length; i++) {
       var r = vals[i];
       if (i > 1 && String(r[TAB.FIO]).indexOf('Ф.И.О') === 0) break;
       if (!r[TAB.FIO]) continue;
-      if (isSectionHeader(r)) { cur = { name: String(r[TAB.FIO]).replace(/\s+/g, ' ').trim(), n: 0, w: 0, a: 0, v: 0, s: 0 }; sections.push(cur); continue; }
+      if (isSectionHeader(r, midx)) { cur = { name: String(r[TAB.FIO]).replace(/\s+/g, ' ').trim(), n: 0, w: 0, a: 0, v: 0, s: 0 }; sections.push(cur); continue; }
       if (!cur) { cur = { name: '—', n: 0, w: 0, a: 0, v: 0, s: 0 }; sections.push(cur); }
       var e = { fio: String(r[TAB.FIO]).trim(), sec: cur.name, w: 0, a: 0, v: 0, s: 0 };
-      for (var d = 0; d < 31; d++) {
+      for (var d = 0; d < nd; d++) {
         var mark = r[TAB.DAY0 + d * 2], m = String(mark).trim().toLowerCase();
         if (mark !== '') any = true;
         if (m === '+' || typeof mark === 'number') e.w++;
@@ -884,14 +914,17 @@ function tabelMonthSheets(ss) { // [{name, idx}] mavjud oylar, oxirgisi birinchi
 function tabelNameFor(pinfl) { // "ФИО табель" varag'i, bo'lmasa база dagi ism
   var sh = SpreadsheetApp.getActive().getSheetByName(SHEET_NAMES);
   if (sh && sh.getLastRow() > 1) {
-    var v = sh.getRange(2, 1, sh.getLastRow() - 1, 3).getValues();
-    for (var i = 0; i < v.length; i++) if (String(v[i][0]).trim() === pinfl) return String(v[i][2] || v[i][1]);
+    var v = sh.getRange(2, 1, sh.getLastRow() - 1, 4).getValues();
+    for (var i = 0; i < v.length; i++) if (String(v[i][0]).trim() === pinfl) {
+      var stt = String(v[i][3] || '').toLowerCase();
+      return (v[i][2] && stt.indexOf('провер') < 0) ? String(v[i][2]) : String(v[i][1] || ''); // «ПРОВЕРИТЬ» holatidagi taxminiy moslik ishlatilmaydi
+    }
   }
   return pinflInBase(pinfl) || '';
 }
 function findTabelRow(sheet, name) {
   var n = normName(name); if (!n) return null;
-  var vals = sheet.getRange(1, 1, sheet.getLastRow(), 70).getValues();
+  var vals = tabValues(sheet);
   for (var i = 1; i < vals.length; i++) {
     if (i > 1 && String(vals[i][TAB.FIO]).indexOf('Ф.И.О') === 0) break; // pastdagi yakun jadvali
     if (normName(vals[i][TAB.FIO]) === n) return vals[i];
@@ -924,7 +957,7 @@ function showTabelMonths(chat, rec, L) {
     if (!kb.inline_keyboard.length) return send(chat, MSG[L].tabel_err, mainMenu(L));
     return send(chat, MSG[L].choose_month, kb);
   } catch (e) {
-    send(prop('ADMIN_ID'), '⚠️ Табель xatosi: ' + e);
+    send(prop('ADMIN_ID'), '⚠️ Табель xatosi: ' + esc(String(e)));
     return send(chat, MSG[L].tabel_err, mainMenu(L));
   }
 }
@@ -942,8 +975,8 @@ function tabelReport(pinfl, midx, L) {
     var name = tabelNameFor(pinfl);
     var r = findTabelRow(sheet, name);
     if (!r) return MSG[L].tabel_none;
-    var st = { worked: 0, half: 0, vac: 0, sick: 0, bs: 0, absent: [], extra: 0, any: false };
-    for (var d = 0; d < 31; d++) {
+    var st = { worked: 0, half: 0, vac: 0, sick: 0, bs: 0, absent: [], extra: 0, any: false }, tc = tabCols(midx);
+    for (var d = 0; d < tc.nd; d++) {
       var mark = r[TAB.DAY0 + d * 2], hrs = r[TAB.DAY0 + d * 2 + 1];
       if (mark !== '' && mark !== null) st.any = true;
       var m = String(mark).trim().toLowerCase();
@@ -956,9 +989,9 @@ function tabelReport(pinfl, midx, L) {
       if (typeof hrs === 'number') st.extra += hrs;
     }
     if (!st.any) return MSG[L].tabel_nodata;
-    var days = (typeof r[TAB.DAYS] === 'number') ? r[TAB.DAYS] : st.worked;
-    var extra = (typeof r[TAB.EXTRA] === 'number') ? r[TAB.EXTRA] : st.extra;
-    var lines = ['<b>' + MSG[L].tabel_title + ' — ' + MSG[L].months[midx] + ' ' + BONUS_YEAR + '</b>', esc(name), '',
+    var days = (typeof r[tc.DAYS] === 'number') ? r[tc.DAYS] : st.worked;
+    var extra = (typeof r[tc.EXTRA] === 'number') ? r[tc.EXTRA] : st.extra;
+    var lines = ['<b>' + MSG[L].tabel_title + ' — ' + MSG[L].months[midx] + ' ' + TABEL_YEAR + '</b>', esc(name), '',
       MSG[L].t_worked + ': <b>' + fmtNum(days, 0) + '</b> ' + MSG[L].t_days + ' · ' + MSG[L].t_extra + ': <b>' + fmtNum(extra, 0) + '</b>',
       MSG[L].t_vac + ': ' + st.vac + ' · ' + MSG[L].t_sick + ': ' + st.sick + ' · ' + MSG[L].t_bs + ': ' + st.bs + (st.half ? ' · ' + MSG[L].t_half + ': ' + st.half : ''),
       MSG[L].t_absent + ': <b>' + st.absent.length + '</b>'];
@@ -968,7 +1001,7 @@ function tabelReport(pinfl, midx, L) {
     }
     return lines.join('\n');
   } catch (e) {
-    send(prop('ADMIN_ID'), '⚠️ Табель xatosi: ' + e);
+    send(prop('ADMIN_ID'), '⚠️ Табель xatosi: ' + esc(String(e)));
     return MSG[L].tabel_err;
   }
 }
@@ -1075,18 +1108,19 @@ function handleApi(req) {
         if (req.api === 'boot') res.daily = cached('daily:0', function () { return dailyData(0); }); // bitta so'rovda ikkalasi
         return res;
       }
-      case 'daily': return { ok: true, data: cached('daily:' + (req.daysAgo || 0), function () { return dailyData(Number(req.daysAgo || 0)); }) };
-      case 'monthly': return { ok: true, data: cached('monthly:' + (req.monthsAgo || 0), function () { return monthlyData(Number(req.monthsAgo || 0)); }) };
-      case 'search': { logAction(uid, '', 'api_search:' + req.q); return { ok: true, data: searchEmployees(req.q) }; }
-      case 'salary': { logAction(uid, req.pinfl, 'api_salary'); return { ok: true, data: salaryData(req.pinfl) }; }
-      case 'tabel': { logAction(uid, req.pinfl, 'api_tabel'); return { ok: true, data: cached('tabel:' + req.pinfl + ':' + req.midx, function () { return tabelData(req.pinfl, Number(req.midx)); }) }; }
+      case 'daily': { var da = clampInt(req.daysAgo, 0, 90); return { ok: true, data: cached('daily:' + da, function () { return dailyData(da); }) }; }
+      case 'monthly': { var ma = clampInt(req.monthsAgo, 0, 12); return { ok: true, data: cached('monthly:' + ma, function () { return monthlyData(ma); }) }; }
+      case 'search': { var q = String(req.q || '').slice(0, 60); logAction(uid, '', 'api_search:' + q); return { ok: true, data: searchEmployees(q) }; }
+      case 'salary': { var ps = String(req.pinfl || '').replace(/\D/g, '').slice(0, 14); logAction(uid, ps, 'api_salary'); return { ok: true, data: salaryData(ps) }; }
+      case 'tabel': { var pt = String(req.pinfl || '').replace(/\D/g, '').slice(0, 14), mi = clampInt(req.midx, 0, 11); logAction(uid, pt, 'api_tabel'); return { ok: true, data: cached('tabel:' + pt + ':' + mi, function () { return tabelData(pt, mi); }) }; }
       default: return { ok: false, error: 'unknown' };
     }
   } catch (e) {
-    send(prop('ADMIN_ID'), '⚠️ API xatosi (' + req.api + '): ' + e);
+    send(prop('ADMIN_ID'), '⚠️ API xatosi (' + esc(String(req.api)) + '): ' + esc(String(e)));
     return { ok: false, error: 'server', message: String(e) };
   }
 }
+function clampInt(v, lo, hi) { var n = Math.round(Number(v)); if (isNaN(n)) n = lo; return Math.max(lo, Math.min(hi, n)); }
 function cached(key, fn, sec) {
   var c = CacheService.getScriptCache(), v = c.get('api_' + key);
   if (v) return JSON.parse(v);
@@ -1102,13 +1136,13 @@ function markKind(mark) { // 'w' ishlagan, 'h' yarim, 'a' прогул, 'v' ta't
   if (m === 'o' || m === 'о' || m === '0') return 'v'; if (m === 'б' || m === 'b') return 's'; if (m === 'бс' || m === 'bs') return 'b';
   return 'x';
 }
-function tabelRows(sheet) { // [{sec, fio, row}] xodimlar
-  var vals = sheet.getRange(1, 1, sheet.getLastRow(), 70).getValues(), out = [], cur = '—';
+function tabelRows(sheet, midx) { // [{sec, fio, row}] xodimlar
+  var vals = tabValues(sheet), out = [], cur = '—';
   for (var i = 1; i < vals.length; i++) {
     var r = vals[i];
     if (i > 1 && String(r[TAB.FIO]).indexOf('Ф.И.О') === 0) break;
     if (!r[TAB.FIO]) continue;
-    if (isSectionHeader(r)) { cur = String(r[TAB.FIO]).replace(/\s+/g, ' ').trim(); continue; }
+    if (isSectionHeader(r, midx)) { cur = String(r[TAB.FIO]).replace(/\s+/g, ' ').trim(); continue; }
     out.push({ sec: cur, fio: String(r[TAB.FIO]).trim(), row: r });
   }
   return out;
@@ -1116,10 +1150,10 @@ function tabelRows(sheet) { // [{sec, fio, row}] xodimlar
 function dailyData(daysAgo) {
   var dt = new Date(); dt.setDate(dt.getDate() - daysAgo);
   var midx = dt.getMonth(), day = dt.getDate(), out = { date: [dt.getFullYear(), midx, day], filled: false, total: { n: 0, w: 0, a: 0, u: 0 }, sections: [] };
-  var sheet = tabelFile().getSheetByName(RU_MONTHS[midx]);
+  var sheet = tabelSheetFor(dt.getFullYear(), midx);
   if (!sheet) return out;
   var col = TAB.DAY0 + (day - 1) * 2, bySec = {};
-  tabelRows(sheet).forEach(function (e) {
+  tabelRows(sheet, midx).forEach(function (e) {
     var k = markKind(e.row[col]);
     if (!bySec[e.sec]) { bySec[e.sec] = { name: e.sec, n: 0, w: 0, a: 0, u: 0, people: [] }; out.sections.push(bySec[e.sec]); }
     var sc = bySec[e.sec]; sc.n++; out.total.n++;
@@ -1134,12 +1168,12 @@ function dailyData(daysAgo) {
 function monthlyData(monthsAgo) {
   var dt = new Date(); dt.setDate(1); dt.setMonth(dt.getMonth() - monthsAgo);
   var midx = dt.getMonth(), out = { month: [dt.getFullYear(), midx], filled: false, total: { n: 0, w: 0, a: 0, v: 0, s: 0 }, sections: [], top: [] };
-  var sheet = tabelFile().getSheetByName(RU_MONTHS[midx]);
+  var sheet = tabelSheetFor(dt.getFullYear(), midx);
   if (!sheet) return out;
-  var bySec = {}, emps = [];
-  tabelRows(sheet).forEach(function (e) {
+  var bySec = {}, emps = [], nd = daysInMonth(midx);
+  tabelRows(sheet, midx).forEach(function (e) {
     var c = { fio: e.fio, sec: e.sec, w: 0, a: 0, v: 0, s: 0 };
-    for (var d = 0; d < 31; d++) {
+    for (var d = 0; d < nd; d++) {
       var k = markKind(e.row[TAB.DAY0 + d * 2]);
       if (k !== 'u') out.filled = true;
       if (k === 'w') c.w++; else if (k === 'h') c.w += 0.5; else if (k === 'a') c.a++; else if (k === 'v') c.v++; else if (k === 's') c.s++;
@@ -1176,14 +1210,15 @@ function tabelData(pinfl, midx) {
   var r = findTabelRow(sheet, name);
   if (!r) return out;
   out.found = true;
-  for (var d = 0; d < 31; d++) {
+  var tc = tabCols(midx);
+  for (var d = 0; d < tc.nd; d++) {
     var mark = r[TAB.DAY0 + d * 2], hrs = r[TAB.DAY0 + d * 2 + 1], k = markKind(mark);
     out.days.push({ d: d + 1, k: k, raw: mark === '' ? '' : String(mark), hrs: typeof hrs === 'number' ? hrs : 0 });
     if (k === 'w') out.w++; else if (k === 'h') out.h++; else if (k === 'a') out.a++; else if (k === 'v') out.v++; else if (k === 's') out.s++; else if (k === 'b') out.b++;
     if (typeof hrs === 'number') out.extra += hrs;
   }
-  if (typeof r[TAB.DAYS] === 'number') out.totalDays = r[TAB.DAYS];
-  if (typeof r[TAB.EXTRA] === 'number') out.extra = r[TAB.EXTRA];
+  if (typeof r[tc.DAYS] === 'number') out.totalDays = r[tc.DAYS];
+  if (typeof r[tc.EXTRA] === 'number') out.extra = r[tc.EXTRA];
   return out;
 }
 
@@ -1357,6 +1392,7 @@ function aiAnswer(uid, question, L, name) {
     messages.push(msg);
     if (!msg.tool_calls || !msg.tool_calls.length) {
       var text = String(msg.content || '').trim();
+      if (!text) text = (AI_MSG[L] || AI_MSG.uz).err;
       aiHistPut(uid, hist.concat([{ role: 'user', content: question }, { role: 'assistant', content: text }]));
       return { text: text, tools: used, candidates: cands && cands.length > 1 ? cands : null };
     }
@@ -1391,7 +1427,7 @@ function aiPick(uid, chat, q, L) {
     logAction(uid, pinfl, 'ai_pick [' + ans.tools.join(',') + ']');
     return send(chat, esc(ans.text), aiCandidatesKb(ans.candidates) || mainMenu(L));
   } catch (e) {
-    try { send(prop('ADMIN_ID'), '⚠️ AI xatosi: ' + String(e).slice(0, 500)); } catch (x) {}
+    try { send(prop('ADMIN_ID'), '⚠️ AI xatosi: ' + esc(String(e).slice(0, 500))); } catch (x) {}
     return send(chat, A.err, mainMenu(L));
   }
 }
@@ -1411,7 +1447,7 @@ function aiHandle(uid, chat, m, text, L, mgrName) {
     logAction(uid, '', 'ai:' + question.slice(0, 80) + ' [' + ans.tools.join(',') + ']');
     return send(chat, heard + esc(ans.text), aiCandidatesKb(ans.candidates) || mainMenu(L));
   } catch (e) {
-    try { send(prop('ADMIN_ID'), '⚠️ AI xatosi: ' + String(e).slice(0, 500)); } catch (x) {}
+    try { send(prop('ADMIN_ID'), '⚠️ AI xatosi: ' + esc(String(e).slice(0, 500))); } catch (x) {}
     return send(chat, heard + A.err, mainMenu(L));
   }
 }
