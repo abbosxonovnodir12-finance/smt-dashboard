@@ -41,7 +41,7 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-09-26.2';
+var BOT_VERSION = '2026-09-26.3';
 var API_CACHE_SEC = 900; // Mini App ma'lumotlari keshi (soniya); warmApiCache() har 5 daqiqada yangilab turadi
 var WARM_MINUTES = 5;
 var REPORT_HOUR = 10;
@@ -493,7 +493,7 @@ function closePicker(q) {
     tg('editMessageText', { chat_id: q.message.chat.id, message_id: q.message.message_id, text: esc(base) + (label ? ' <b>' + esc(label) + '</b>' : ''), parse_mode: 'HTML' });
   } catch (e) {}
 }
-var PICKERS = { lang: 1, month: 1, tab: 1, mp: 1, ms: 1, mt: 1, mm: 1, mtab: 1 };
+var PICKERS = { lang: 1, month: 1, tab: 1, mp: 1, ms: 1, mt: 1, mm: 1, mtab: 1, aip: 1 };
 function handleCallback(q) {
   var uid = q.from.id, chat = q.message.chat.id, data = q.data || '';
   tg('answerCallbackQuery', { callback_query_id: q.id });
@@ -501,6 +501,7 @@ function handleCallback(q) {
   if (PICKERS[parts[0]]) closePicker(q);
   var recQ = findByTgId(uid);
   MGR = isManager(recQ, uid);
+  if (parts[0] === 'aip') { if (!MGR) return; return aiPick(uid, chat, q, (recQ && recQ.v[T.LANG]) || 'uz'); }
   if (parts[0] === 'day' || parts[0] === 'mon' || parts[0] === 'mp' || parts[0] === 'ms' || parts[0] === 'mt' || parts[0] === 'mm' || parts[0] === 'mtab') {
     if (!MGR) return;
     var Lq = (recQ && recQ.v[T.LANG]) || 'uz';
@@ -1328,7 +1329,7 @@ function openai(path, payload, isBlobForm) {
 function aiAnswer(uid, question, L, name) {
   var hist = aiHistGet(uid);
   var messages = [{ role: 'system', content: aiSystemPrompt(L, name) }].concat(hist, [{ role: 'user', content: question }]);
-  var used = [];
+  var used = [], cands = null; // bir nechta xodim topilsa — tugma sifatida taklif qilamiz
   for (var step = 0; step < AI_MAX_STEPS; step++) {
     var r = openai('chat/completions', { model: prop('AI_MODEL') || 'gpt-4o-mini', messages: messages, tools: AI_TOOLS, tool_choice: 'auto', temperature: 0.1, max_tokens: 900 });
     var msg = r.choices[0].message;
@@ -1336,12 +1337,14 @@ function aiAnswer(uid, question, L, name) {
     if (!msg.tool_calls || !msg.tool_calls.length) {
       var text = String(msg.content || '').trim();
       aiHistPut(uid, hist.concat([{ role: 'user', content: question }, { role: 'assistant', content: text }]));
-      return { text: text, tools: used };
+      return { text: text, tools: used, candidates: cands && cands.length > 1 ? cands : null };
     }
     msg.tool_calls.forEach(function (tc) {
       var args = {}; try { args = JSON.parse(tc.function.arguments || '{}'); } catch (e) {}
       var out; try { out = aiTool(tc.function.name, args); } catch (e) { out = { error: String(e) }; }
       used.push(tc.function.name);
+      if (tc.function.name === 'find_employee') cands = out.results || null;
+      else if (args.pinfl) cands = null; // xodim aniqlangan — tanlov kerak emas
       messages.push({ role: 'tool', tool_call_id: tc.id, content: JSON.stringify(out) });
     });
   }
@@ -1354,6 +1357,23 @@ function aiTranscribe(fileId) {
   var blob = UrlFetchApp.fetch('https://api.telegram.org/file/bot' + prop('BOT_TOKEN') + '/' + f.result.file_path).getBlob().setName('voice.ogg');
   var r = openai('audio/transcriptions', { file: blob, model: prop('AI_STT_MODEL') || 'gpt-4o-mini-transcribe', prompt: 'SMT zavodi, xodimlar, oylik, davomat, табель, прогул. Familiyalar: o\'zbekcha.' }, true);
   return String(r.text || '').trim();
+}
+function aiCandidatesKb(c) {
+  if (!c) return null;
+  return { inline_keyboard: c.slice(0, 8).map(function (e) { return [{ text: (e.fio + (e.position ? ' · ' + e.position : '')).slice(0, 60), callback_data: 'aip:' + e.pinfl }]; }) };
+}
+/** Tugma orqali xodim tanlandi — oldingi savolga shu xodim uchun javob */
+function aiPick(uid, chat, q, L) {
+  var A = AI_MSG[L] || AI_MSG.uz, fio = pickedLabel(q).split(' · ')[0], pinfl = q.data.split(':')[1];
+  try { tg('sendChatAction', { chat_id: chat, action: 'typing' }); } catch (e) {}
+  try {
+    var ans = aiAnswer(uid, 'Xodim tanlandi: ' + fio + ' (ПИНФЛ ' + pinfl + '). Oldingi savolimga shu xodim uchun javob ber; find_employee chaqirish shart emas, pinfl ni to\'g\'ridan-to\'g\'ri ishlat.', L, q.from.first_name || '');
+    logAction(uid, pinfl, 'ai_pick [' + ans.tools.join(',') + ']');
+    return send(chat, esc(ans.text), aiCandidatesKb(ans.candidates) || mainMenu(L));
+  } catch (e) {
+    try { send(prop('ADMIN_ID'), '⚠️ AI xatosi: ' + String(e).slice(0, 500)); } catch (x) {}
+    return send(chat, A.err, mainMenu(L));
+  }
 }
 /** handleMessage dan chaqiriladi: matn yoki ovoz → javob */
 function aiHandle(uid, chat, m, text, L, mgrName) {
@@ -1369,7 +1389,7 @@ function aiHandle(uid, chat, m, text, L, mgrName) {
     }
     var ans = aiAnswer(uid, question, L, mgrName);
     logAction(uid, '', 'ai:' + question.slice(0, 80) + ' [' + ans.tools.join(',') + ']');
-    return send(chat, heard + esc(ans.text), mainMenu(L));
+    return send(chat, heard + esc(ans.text), aiCandidatesKb(ans.candidates) || mainMenu(L));
   } catch (e) {
     try { send(prop('ADMIN_ID'), '⚠️ AI xatosi: ' + String(e).slice(0, 500)); } catch (x) {}
     return send(chat, heard + A.err, mainMenu(L));
