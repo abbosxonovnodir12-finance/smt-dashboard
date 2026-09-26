@@ -41,7 +41,7 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-09-26.1';
+var BOT_VERSION = '2026-09-26.2';
 var API_CACHE_SEC = 900; // Mini App ma'lumotlari keshi (soniya); warmApiCache() har 5 daqiqada yangilab turadi
 var WARM_MINUTES = 5;
 var REPORT_HOUR = 10;
@@ -277,7 +277,7 @@ function langKb() { return { inline_keyboard: [[{ text: "O'zbekcha", callback_da
 var ADMIN_HELP = '<b>Admin buyruqlari</b>\n' +
   '/stats — ro\'yxat statistikasi\n/pending — tasdiq kutayotganlar (tugmalar bilan)\n' +
   '/broadcast matn — barcha faol xodimlarga xabar (avval ko\'rsatadi, keyin tasdiqlaysiz)\n' +
-  '/unlink ПИНФЛ — bog\'lanishni bekor qilish\n/version — bot versiyasi\n/id — Telegram ID\n\n' +
+  '/unlink ПИНФЛ — bog\'lanishni bekor qilish\n/find familiya — AI ism qidiruvini tekshirish\n/version — bot versiyasi\n/id — Telegram ID\n\n' +
   '<b>AI yordamchi</b> (rahbarlar): botga erkin savol yozing yoki ovozli xabar yuboring — masalan «Aliyevning avgust oyligi», «Bugun kim kelmadi?»';
 
 function adminStats(chat) {
@@ -356,6 +356,10 @@ function handleMessage(m) {
     if (text === '/pending') return adminPending(chat);
     if (text.indexOf('/broadcast') === 0) return adminBroadcast(uid, chat, text.replace('/broadcast', '').trim());
     if (text === '/admin') return send(chat, ADMIN_HELP);
+    if (text.indexOf('/find ') === 0) { // diagnostika: AI ism qidiruvi nimani topadi
+      var fr = aiFindEmployees(text.slice(6));
+      return send(chat, fr.length ? fr.map(function (e) { return '• ' + esc(e.fio) + ' — ' + esc(e.position) + ' <code>' + e.pinfl + '</code>'; }).join('\n') : 'Topilmadi: ' + esc(text.slice(6)));
+    }
   }
 
   if (text === '/start') {
@@ -1196,9 +1200,13 @@ function latToCyr(s) {
     for (var k = 0; k < LAT_CYR.length; k++) { var p = LAT_CYR[k][0]; if (s.substr(i, p.length) === p) { out += LAT_CYR[k][1]; i += p.length; hit = true; break; } }
     if (!hit) { out += s[i]; i++; }
   }
-  return out.replace(/ийе/g, 'ие').replace(/ий([аеёиоуўэюя])/g, 'и$1');
+  return out.replace(/ийе/g, 'ие').replace(/([аеёиоуўэюя])йе/g, '$1е').replace(/ий([аеёиоуўэюя])/g, 'и$1');
 }
-function nameKey(s) { return normName(/[a-z]/i.test(String(s)) ? latToCyr(s) : s); }
+// Ikkala alifbo va imlo variantlarini bir xil kalitga keltiradi: lotin→kirill, keyin ҳ/х/г, ў/у, қ/к, ғ/г, ё/е, й/и, э/е farqlari yo'qotiladi
+function nameKey(s) {
+  var k = normName(/[a-z]/i.test(String(s)) ? latToCyr(s) : s);
+  return k.replace(/ҳ/g, 'х').replace(/ў/g, 'у').replace(/қ/g, 'к').replace(/ғ/g, 'г').replace(/ё/g, 'е').replace(/э/g, 'е').replace(/й/g, 'и').replace(/ь|ъ/g, '');
+}
 // Xodimni ism bo'yicha topish: token darajasida boshlanish yoki Levenshtein ≤ 2 (ism qisqartmalari va imlo xatolariga chidamli)
 function aiFindEmployees(query) {
   var qTok = String(query || '').split(/[\s,.]+/).map(nameKey).filter(function (t) { return t.length >= 2; });
@@ -1208,7 +1216,7 @@ function aiFindEmployees(query) {
   for (var i = vals.length - 1; i >= 0; i--) {
     var p = String(vals[i][COL.PINFL]).trim(), fio = String(vals[i][COL.FIO]).trim();
     if (!p || seen[p]) continue; seen[p] = 1;
-    var fTok = fio.split(/[\s,.]+/).map(normName).filter(Boolean), score = 0;
+    var fTok = fio.split(/[\s,.]+/).map(nameKey).filter(Boolean), score = 0;
     qTok.forEach(function (q) {
       var best = 0;
       fTok.forEach(function (f) {
