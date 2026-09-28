@@ -47,7 +47,7 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-09-27.1';
+var BOT_VERSION = '2026-09-28.1';
 var API_CACHE_SEC = 900; // Mini App ma'lumotlari keshi (soniya); warmApiCache() har 5 daqiqada yangilab turadi
 var WARM_MINUTES = 5;
 var REPORT_HOUR = 10;
@@ -808,6 +808,7 @@ function warmApiCache() {
   var c = CacheService.getScriptCache(), items = {};
   try { items['api_months'] = tabelMonthSheets(tabelFile()).map(function (m) { return m.idx; }); } catch (e) {}
   try { items['api_daily:0'] = dailyData(0); } catch (e) {}
+  try { c.put('api_daily:0', JSON.stringify(items['api_daily:0']), 360); delete items['api_daily:0']; } catch (e) {} // bugungi kun — 6 daqiqa (табель kun davomida to'ldiriladi)
   try { items['api_daily:1'] = dailyData(1); } catch (e) {}
   try { items['api_monthly:0'] = monthlyData(0); } catch (e) {}
   try { items['api_monthly:1'] = monthlyData(1); } catch (e) {}
@@ -1105,10 +1106,10 @@ function handleApi(req) {
         var months = cached('months', function () { return tabelMonthSheets(tabelFile()).map(function (m) { return m.idx; }); });
         var today = new Date();
         var res = { ok: true, lang: L, name: user.first_name || '', today: [today.getFullYear(), today.getMonth(), today.getDate()], tabelMonths: months, version: BOT_VERSION };
-        if (req.api === 'boot') res.daily = cached('daily:0', function () { return dailyData(0); }); // bitta so'rovda ikkalasi
+        if (req.api === 'boot') res.daily = cached('daily:0', function () { return dailyData(0); }, 360); // bitta so'rovda ikkalasi
         return res;
       }
-      case 'daily': { var da = clampInt(req.daysAgo, 0, 90); return { ok: true, data: cached('daily:' + da, function () { return dailyData(da); }) }; }
+      case 'daily': { var da = clampInt(req.daysAgo, 0, 90); return { ok: true, data: cached('daily:' + da, function () { return dailyData(da); }, da === 0 ? 360 : 0) }; }
       case 'monthly': { var ma = clampInt(req.monthsAgo, 0, 12); return { ok: true, data: cached('monthly:' + ma, function () { return monthlyData(ma); }) }; }
       case 'search': { var q = String(req.q || '').slice(0, 60); logAction(uid, '', 'api_search:' + q); return { ok: true, data: searchEmployees(q) }; }
       case 'salary': { var ps = String(req.pinfl || '').replace(/\D/g, '').slice(0, 14); logAction(uid, ps, 'api_salary'); return { ok: true, data: salaryData(ps) }; }
@@ -1290,6 +1291,8 @@ var AI_TOOLS = [
       parameters: { type: 'object', properties: { pinfl: { type: 'string' } }, required: ['pinfl'] } } },
   { type: 'function', function: { name: 'get_employee_attendance', description: 'Xodimning bir oylik davomati (табель): ishlangan kunlar, qo\'shimcha soat, ta\'til, kasallik, прогул sanalari. month: 0=Yanvar … 11=Dekabr.',
       parameters: { type: 'object', properties: { pinfl: { type: 'string' }, month: { type: 'string', description: 'Oy raqami "1".."12" (1=Yanvar, 8=Avgust, 9=Sentabr, 12=Dekabr) yoki oy nomi. Foydalanuvchi oy aytmasa — joriy oy.' } }, required: ['pinfl', 'month'] } } },
+  { type: 'function', function: { name: 'get_employee_day', description: 'BITTA xodimning BITTA kundagi holati (bugun keldimi, kecha nima bo\'lgan): present / half_day / absent / vacation / sick / bs / unmarked. Табельдан to\'g\'ridan-to\'g\'ri, keshsiz o\'qiladi. "X bugun keldimi?" kabi savollarda AYNAN shu asbobni ishlating. days_ago: 0=bugun, 1=kecha.',
+      parameters: { type: 'object', properties: { pinfl: { type: 'string' }, days_ago: { type: 'integer', minimum: 0, maximum: 60 } }, required: ['pinfl', 'days_ago'] } } },
   { type: 'function', function: { name: 'get_daily_attendance', description: 'Butun zavod bo\'yicha bir kunlik davomat: bo\'limlar kesimida kelgan/kelmagan soni va kelmaganlar ismi. days_ago: 0=bugun, 1=kecha …',
       parameters: { type: 'object', properties: { days_ago: { type: 'integer', minimum: 0, maximum: 60 } }, required: ['days_ago'] } } },
   { type: 'function', function: { name: 'get_monthly_attendance', description: 'Butun zavod bo\'yicha oylik davomat yakuni: bo\'limlar kesimida xodimlar, ishlangan kunlar, прогул, ta\'til, kasallik va TOP-10 прогулчилар. months_ago: 0=shu oy, 1=o\'tgan oy …',
@@ -1348,8 +1351,20 @@ function aiTool(name, a) {
       var filled = d.days.some(function (x) { return x.k !== 'u'; }); if (!filled) return { error: 'month_not_filled', month: RU_MONTHS[mi] };
       return { name: d.name, month: RU_MONTHS[mi], worked_days: d.totalDays !== null ? d.totalDays : d.w, half_days: d.h, extra_hours: d.extra, vacation: d.v, sick: d.s, bs: d.b, absent_count: absent.length, absent_dates: absent };
     }
+    case 'get_employee_day': {
+      var dt0 = new Date(); dt0.setDate(dt0.getDate() - clampInt(a.days_ago, 0, 60));
+      var mi0 = dt0.getMonth(), day0 = dt0.getDate(), sh0 = tabelSheetFor(dt0.getFullYear(), mi0);
+      var dateStr = (day0 < 10 ? '0' : '') + day0 + '.' + (mi0 < 9 ? '0' : '') + (mi0 + 1) + '.' + dt0.getFullYear();
+      if (!sh0) return { error: 'month_not_in_tabel', date: dateStr };
+      var nm0 = tabelNameFor(String(a.pinfl)), r0 = findTabelRow(sh0, nm0);
+      if (!r0) return { error: 'not_in_tabel', name: nm0, date: dateStr };
+      var mk0 = r0[TAB.DAY0 + (day0 - 1) * 2], hr0 = r0[TAB.DAY0 + (day0 - 1) * 2 + 1], k0 = markKind(mk0);
+      var STATUS = { w: 'present', h: 'half_day', a: 'absent', v: 'vacation', s: 'sick', b: 'bs', u: 'unmarked', x: 'other' };
+      return { name: nm0, date: dateStr, status: STATUS[k0], raw_mark: mk0 === '' ? '' : String(mk0), extra_hours: typeof hr0 === 'number' ? hr0 : 0,
+        note: k0 === 'u' ? 'Табельда bu kun uchun belgi hali qo\'yilmagan — "kelmagan" DEMANG, "hali belgilanmagan" deng' : '' };
+    }
     case 'get_daily_attendance': {
-      var dd = cached('daily:' + a.days_ago, function () { return dailyData(Number(a.days_ago)); });
+      var dd = Number(a.days_ago) === 0 ? dailyData(0) : cached('daily:' + a.days_ago, function () { return dailyData(Number(a.days_ago)); }); // bugungi kun — har doim yangi
       return { date: dd.date[2] + '.' + (dd.date[1] + 1) + '.' + dd.date[0], filled: dd.filled, total: dd.total,
         sections: dd.sections.map(function (s) { return { name: s.name, total: s.n, present: s.w, absent: s.a, unmarked: s.u, absent_people: s.people.map(function (p) { return p.fio + ' (' + (p.k === 'a' ? 'прогул' : p.k === 'v' ? 'отпуск' : p.k === 's' ? 'больничный' : p.k === 'b' ? 'Бс' : p.k === 'h' ? 'полдня' : p.raw) + ')'; }) }; }) };
     }
@@ -1370,6 +1385,7 @@ function aiSystemPrompt(L, name) {
     "5. Ovozdan tanilgan ismlar noto'g'ri yozilgan bo'lishi mumkin — find_employee taxminiy qidiradi, natijadagi F.I.O. ni javobda to'liq yozing.\n" +
     "6. Ma'lumot yo'q bo'lsa (табель to'ldirilmagan, davr topilmadi) — buni ochiq ayting va mavjud variantlarni taklif qiling.\n" +
     "7. Oy raqamlari odatdagidek: Yanvar=1 … Avgust=8, Sentabr=9, Oktabr=10, Dekabr=12. get_employee_attendance ga oy raqamini yoki nomini bering.\n" +
+    "9. «X bugun/kecha keldimi?» — get_employee_day ishlating (butun zavod ro'yxatidan xulosa chiqarmang). status=unmarked bo'lsa «hali belgilanmagan» deng, «kelmagan» emas. get_daily_attendance dagi unmarked ham «kelmagan» degani emas.\n" +
     "8. Asbob error qaytarsa — javobda error kodini emas, sababini odam tilida yozing (masalan «Avgust uchun табель hali to'ldirilmagan»). «Topilmadi» deb aytishdan oldin find_employee natijasidagi pinfl ni to'g'ri uzatganingizga ishonch hosil qiling.";
 }
 function aiHistGet(uid) { var s = CacheService.getScriptCache().get('ai_h_' + uid); return s ? JSON.parse(s) : []; }
