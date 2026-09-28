@@ -47,7 +47,7 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-09-28.3';
+var BOT_VERSION = '2026-09-29.1';
 var API_CACHE_SEC = 900; // Mini App ma'lumotlari keshi (soniya); warmApiCache() har 5 daqiqada yangilab turadi
 var WARM_MINUTES = 5;
 var REPORT_HOUR = 10;
@@ -76,7 +76,7 @@ var MSG = {
     y: "yil", mo: "oy", d: "kun",
     btn_salary: "💰 Oylik", btn_bonus: "➕ Qo'shimcha to'lov", btn_lang: "🌐 Til", btn_request: "✉️ Adminga ariza",
     btn_daily: "📊 Kunlik davomat", btn_dash: "📱 Dashboard", open_dash: "Dashboard'ni ochish", btn_lookup: "🔎 Xodim ma'lumoti", what_show: "Nimani ko'rsatay?",
-    daily_title: "📊 Davomat", d_total: "Jami", d_present: "kelgan", d_absent: "kelmagan", d_unmarked: "belgilanmagan",
+    daily_title: "📊 Davomat", d_total: "Jami", d_legend_p: "Kelgan", d_legend_a: "Kelmagan", d_legend_u: "Belgilanmagan", d_absent_list: "Kelmaganlar", d_present: "kelgan", d_absent: "kelmagan", d_unmarked: "belgilanmagan",
     d_empty: "Bu kun uchun табель hali to'ldirilmagan.", d_today: "Bugun", d_yest: "Kecha", d_prev_month: "📈 O'tgan oy", d_this_month: "📈 Shu oy",
     m_title: "📈 Davomat yakuni", m_emps: "Xodimlar", m_workdays: "ishlangan kun-jami", m_abs: "прогул", m_vac: "ta'til", m_sick: "kasallik",
     m_top: "TOP-10 eng ko'p kelmaganlar (прогул)", m_noabs: "Прогул yo'q 👍", m_sections: "Bo'limlar", m_emp: "xodim",
@@ -120,7 +120,7 @@ var MSG = {
     y: "г.", mo: "мес.", d: "дн.",
     btn_salary: "💰 Зарплата", btn_bonus: "➕ Надбавка", btn_lang: "🌐 Язык", btn_request: "✉️ Заявка админу",
     btn_daily: "📊 Табель за день", btn_dash: "📱 Дашборд", open_dash: "Открыть дашборд", btn_lookup: "🔎 Сотрудник", what_show: "Что показать?",
-    daily_title: "📊 Табель", d_total: "Итого", d_present: "присутствуют", d_absent: "отсутствуют", d_unmarked: "не отмечено",
+    daily_title: "📊 Табель", d_total: "Итого", d_legend_p: "Присутствуют", d_legend_a: "Отсутствуют", d_legend_u: "Не отмечено", d_absent_list: "Отсутствуют", d_present: "присутствуют", d_absent: "отсутствуют", d_unmarked: "не отмечено",
     d_empty: "Табель за этот день ещё не заполнен.", d_today: "Сегодня", d_yest: "Вчера", d_prev_month: "📈 Прошлый месяц", d_this_month: "📈 Этот месяц",
     m_title: "📈 Итоги табеля", m_emps: "Сотрудники", m_workdays: "отработано дней всего", m_abs: "прогулы", m_vac: "отпуск", m_sick: "больничный",
     m_top: "TOP-10 по прогулам", m_noabs: "Прогулов нет 👍", m_sections: "Отделы", m_emp: "сотр.",
@@ -183,10 +183,11 @@ function webhookInfo() {
 function prop(k) { return PropertiesService.getScriptProperties().getProperty(k); }
 
 // ---------- Telegram API ----------
-function tg(method, payload) {
+function tg(method, payload, multipart) {
   // Google → Telegram tarmog'i vaqti-vaqti bilan uziladi ("Address unavailable") — 3 marta urinamiz
   var url = 'https://api.telegram.org/bot' + prop('BOT_TOKEN') + '/' + method;
-  var opt = { method: 'post', contentType: 'application/json', payload: JSON.stringify(payload), muteHttpExceptions: true };
+  var opt = multipart ? { method: 'post', payload: payload, muteHttpExceptions: true } // fayl (rasm) yuborish — multipart/form-data
+                      : { method: 'post', contentType: 'application/json', payload: JSON.stringify(payload), muteHttpExceptions: true };
   var lastErr;
   for (var i = 0; i < 3; i++) {
     if (i) Utilities.sleep(700 * i);
@@ -429,7 +430,7 @@ function handleMessage(m) {
     if (!MGR) return send(chat, MSG[L].not_allowed, mainMenu(L));
     var kbd = [[{ text: MSG[L].d_yest, callback_data: 'day:1' }], [{ text: MSG[L].d_this_month, callback_data: 'mon:0' }, { text: MSG[L].d_prev_month, callback_data: 'mon:1' }]];
     if (prop('MINIAPP_URL')) kbd.push([{ text: MSG[L].btn_dash, web_app: { url: prop('MINIAPP_URL') } }]);
-    return send(chat, buildDailyReport(L, 0), { inline_keyboard: kbd });
+    return sendDaily(chat, L, 0, { inline_keyboard: kbd });
   }
   if (text === MSG.uz.btn_dash || text === MSG.ru.btn_dash) {
     if (!MGR) return send(chat, MSG[L].not_allowed, mainMenu(L));
@@ -543,7 +544,7 @@ function handleCallback(q) {
   if (parts[0] === 'day' || parts[0] === 'mon' || parts[0] === 'mp' || parts[0] === 'ms' || parts[0] === 'mt' || parts[0] === 'mm' || parts[0] === 'mtab') {
     if (!MGR) return;
     var Lq = (recQ && recQ.v[T.LANG]) || 'uz';
-    if (parts[0] === 'day') return send(chat, buildDailyReport(Lq, Number(parts[1])), mainMenu(Lq));
+    if (parts[0] === 'day') return sendDaily(chat, Lq, Number(parts[1]), mainMenu(Lq));
     if (parts[0] === 'mon') return send(chat, buildMonthlyReport(Lq, Number(parts[1])), mainMenu(Lq));
     if (parts[0] === 'mp') return send(chat, esc(pinflInBase(parts[1]) || '') + '\n' + MSG[Lq].what_show,
       { inline_keyboard: [[{ text: MSG[Lq].btn_salary, callback_data: 'ms:' + parts[1] }, { text: MSG[Lq].btn_tabel, callback_data: 'mt:' + parts[1] }]] });
@@ -789,10 +790,8 @@ function cleanLog() {
 /** Trigger uchun: har kuni REPORT_HOUR da admin va barcha rahbarlarga yuboradi. installTriggers() ni bir marta ishga tushiring. */
 function dailyReport() {
   try { cleanLog(); } catch (e) {}
-  var cache = {};
   managerTargets().forEach(function (t) {
-    if (!cache[t.L]) cache[t.L] = buildDailyReport(t.L, 0);
-    try { send(t.id, cache[t.L]); } catch (e) {}
+    try { sendDaily(t.id, t.L, 0, null); } catch (e) {}
   });
 }
 function installTriggers() {
@@ -1224,6 +1223,82 @@ function tabelData(pinfl, midx) {
   if (typeof r[tc.DAYS] === 'number') out.totalDays = r[tc.DAYS];
   if (typeof r[tc.EXTRA] === 'number') out.extra = r[tc.EXTRA];
   return out;
+}
+
+// =====================================================================
+// Kunlik davomat — diagramma (PNG). QuickChart.io (Chart.js) orqali chiziladi; ishlamasa matnli hisobot yuboriladi.
+// =====================================================================
+var CHART_COLORS = { p: '#2E7D32', a: '#C62828', u: '#9E9E9E' }; // holat ranglari: kelgan / kelmagan / belgilanmagan
+function dailyChartConfig(d, L) {
+  var secs = d.sections.filter(function (x) { return x.n > 0; });
+  var labels = secs.map(function (x) { return x.name.length > 28 ? x.name.slice(0, 27) + '…' : x.name; });
+  var date = (d.date[2] < 10 ? '0' : '') + d.date[2] + '.' + (d.date[1] < 9 ? '0' : '') + (d.date[1] + 1) + '.' + d.date[0];
+  var t = d.total, pct = t.n ? Math.round(100 * t.w / t.n) : 0;
+  var sub = MSG[L].d_total + ' ' + t.n + ' · ' + MSG[L].d_present + ' ' + t.w + ' (' + pct + '%) · ' + MSG[L].d_absent + ' ' + t.a + (t.u ? ' · ' + MSG[L].d_unmarked + ' ' + t.u : '');
+  var ds = function (key, label, color) { return { label: label, data: secs.map(function (x) { return x[key]; }), backgroundColor: color, borderColor: '#ffffff', borderWidth: 1, borderRadius: 3, barPercentage: 0.7, categoryPercentage: 0.85 }; };
+  return {
+    width: 900, height: Math.max(320, 170 + secs.length * 34), totals: secs.map(function (x) { return x.n; }),
+    chart: {
+      type: 'bar',
+      data: { labels: labels, datasets: [ds('w', MSG[L].d_legend_p, CHART_COLORS.p), ds('a', MSG[L].d_legend_a, CHART_COLORS.a), ds('u', MSG[L].d_legend_u, CHART_COLORS.u)] },
+      options: {
+        indexAxis: 'y', responsive: false, animation: false,
+        layout: { padding: { right: 56, left: 8, top: 8, bottom: 8 } },
+        plugins: {
+          title: { display: true, text: MSG[L].daily_title.replace(/^📊\s*/, '') + ' — ' + date, font: { size: 22, weight: '600' }, color: '#111111', padding: { bottom: 2 } },
+          subtitle: { display: true, text: sub, font: { size: 14 }, color: '#555555', padding: { bottom: 14 } },
+          legend: { position: 'top', align: 'end', labels: { boxWidth: 12, boxHeight: 12, font: { size: 13 }, color: '#333333' } },
+          datalabels: { color: '#ffffff', font: { size: 12, weight: '600' }, formatter: '__FMT__' }
+        },
+        scales: {
+          x: { stacked: true, grid: { color: '#EEEEEE' }, ticks: { color: '#777777', font: { size: 12 }, precision: 0 }, border: { display: false } },
+          y: { stacked: true, grid: { display: false }, ticks: { color: '#222222', font: { size: 13 } }, border: { display: false } }
+        }
+      }
+    }
+  };
+}
+/** Chart.js konfiguratsiyasi JS matni ko'rinishida (funksiyalar bilan) — QuickChart "chart" maydoni JS qabul qiladi */
+function dailyChartJs(cfg) {
+  var js = JSON.stringify(cfg.chart)
+    .replace('"__FMT__"', 'function(v){return v>0?v:"";}');
+  // o'ng tomonda bo'lim yakuni (jami xodim) — kichik plagin
+  var totals = JSON.stringify(cfg.totals);
+  js = js.slice(0, -1) + ',"plugins":[{"id":"totals","afterDatasetsDraw":function(c){var ctx=c.ctx,m=c.getDatasetMeta(0),tot=' + totals + ',xs=c.scales.x;ctx.save();ctx.font="600 13px sans-serif";ctx.fillStyle="#222222";ctx.textBaseline="middle";ctx.textAlign="left";m.data.forEach(function(b,i){ctx.fillText(String(tot[i]),xs.getPixelForValue(tot[i])+6,b.y);});ctx.restore();}}]}';
+  return js;
+}
+function dailyChartBlob(d, L) {
+  var cfg = dailyChartConfig(d, L);
+  var body = JSON.stringify({ version: '4', width: cfg.width, height: cfg.height, backgroundColor: '#ffffff', devicePixelRatio: 2, format: 'png', chart: dailyChartJs(cfg) });
+  var res = UrlFetchApp.fetch('https://quickchart.io/chart', { method: 'post', contentType: 'application/json', payload: body, muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) throw new Error('QuickChart HTTP ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200));
+  return res.getBlob().setName('davomat.png');
+}
+function dailyCaption(d, L) {
+  var lines = [];
+  d.sections.forEach(function (s) {
+    if (!s.people.length) return;
+    lines.push('<b>' + esc(s.name) + '</b>: ' + s.people.map(function (p) { return esc(p.fio) + ' (' + (p.k === 'a' ? MSG[L].mark_abs : p.k === 'v' ? MSG[L].mark_vac : p.k === 's' ? MSG[L].mark_sick : p.k === 'b' ? MSG[L].mark_bs : p.k === 'h' ? MSG[L].mark_half : esc(p.raw)) + ')'; }).join(', '));
+  });
+  var cap = lines.length ? '<b>' + MSG[L].d_absent_list + ':</b>\n' + lines.join('\n') : '';
+  return cap.length > 1000 ? cap.slice(0, 990) + '…' : cap;
+}
+/** Kunlik davomatni diagramma bilan yuboradi; diagramma chizilmasa — matnli hisobot */
+function sendDaily(chat, L, daysAgo, kb) {
+  var d;
+  try { d = daysAgo === 0 ? dailyData(0) : cached('daily:' + daysAgo, function () { return dailyData(daysAgo); }); } catch (e) { d = null; }
+  if (d && d.filled && d.total.n) {
+    try {
+      var blob = dailyChartBlob(d, L), cap = dailyCaption(d, L);
+      var p = { chat_id: String(chat), photo: blob, parse_mode: 'HTML' };
+      if (cap) p.caption = cap;
+      if (kb) p.reply_markup = JSON.stringify(kb);
+      var r = tg('sendPhoto', p, true);
+      if (r && r.ok) return r;
+      Logger.log('sendPhoto xato: ' + JSON.stringify(r));
+    } catch (e) { Logger.log('Diagramma xatosi: ' + e); }
+  }
+  return send(chat, buildDailyReport(L, daysAgo), kb); // fallback: matn
 }
 
 // =====================================================================
