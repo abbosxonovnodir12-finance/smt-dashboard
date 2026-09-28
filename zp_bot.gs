@@ -47,7 +47,7 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-09-28.2';
+var BOT_VERSION = '2026-09-28.3';
 var API_CACHE_SEC = 900; // Mini App ma'lumotlari keshi (soniya); warmApiCache() har 5 daqiqada yangilab turadi
 var WARM_MINUTES = 5;
 var REPORT_HOUR = 10;
@@ -529,7 +529,7 @@ function closePicker(q) {
     tg('editMessageText', { chat_id: q.message.chat.id, message_id: q.message.message_id, text: esc(base) + (label ? ' <b>' + esc(label) + '</b>' : ''), parse_mode: 'HTML' });
   } catch (e) {}
 }
-var PICKERS = { lang: 1, month: 1, tab: 1, mp: 1, ms: 1, mt: 1, mm: 1, mtab: 1, aip: 1 };
+var PICKERS = { lang: 1, month: 1, tab: 1, mp: 1, ms: 1, mt: 1, mm: 1, mtab: 1, aip: 1, smp: 1 };
 function handleCallback(q) {
   var uid = q.from.id, chat = q.message.chat.id, data = q.data || '';
   tg('answerCallbackQuery', { callback_query_id: q.id });
@@ -539,6 +539,7 @@ function handleCallback(q) {
   MGR = isManager(recQ, uid);
   if (parts[0] === 'aip') { if (!MGR) return; return aiPick(uid, chat, q, (recQ && recQ.v[T.LANG]) || 'uz'); }
   if (parts[0] === 'sm') { if (String(uid) !== String(prop('ADMIN_ID'))) return; return sendDraftMessage(uid, chat, q); }
+  if (parts[0] === 'smp') { if (String(uid) !== String(prop('ADMIN_ID'))) return; return pickMsgRecipient(uid, chat, q); }
   if (parts[0] === 'day' || parts[0] === 'mon' || parts[0] === 'mp' || parts[0] === 'ms' || parts[0] === 'mt' || parts[0] === 'mm' || parts[0] === 'mtab') {
     if (!MGR) return;
     var Lq = (recQ && recQ.v[T.LANG]) || 'uz';
@@ -1293,8 +1294,8 @@ var AI_TOOLS = [
       parameters: { type: 'object', properties: { pinfl: { type: 'string' } }, required: ['pinfl'] } } },
   { type: 'function', function: { name: 'get_employee_attendance', description: 'Xodimning bir oylik davomati (табель): ishlangan kunlar, qo\'shimcha soat, ta\'til, kasallik, прогул sanalari. month: 0=Yanvar … 11=Dekabr.',
       parameters: { type: 'object', properties: { pinfl: { type: 'string' }, month: { type: 'string', description: 'Oy raqami "1".."12" (1=Yanvar, 8=Avgust, 9=Sentabr, 12=Dekabr) yoki oy nomi. Foydalanuvchi oy aytmasa — joriy oy.' } }, required: ['pinfl', 'month'] } } },
-  { type: 'function', function: { name: 'prepare_message', description: 'Xodimga bot orqali xabar yuborishga TAYYORLAYDI (faqat admin). Xabar darhol ketmaydi — foydalanuvchiga «Yuborish / Bekor» tugmalari ko\'rsatiladi. Foydalanuvchi «X ga xabar yubor: …» desa shu asbobni chaqiring; text — foydalanuvchi aytgan xabar matni (o\'zgartirmang, tarjima qilmang).',
-      parameters: { type: 'object', properties: { pinfl: { type: 'string' }, text: { type: 'string' } }, required: ['pinfl', 'text'] } } },
+  { type: 'function', function: { name: 'prepare_message', description: 'Xodimga bot orqali xabar yuborish (faqat admin). Foydalanuvchi «X ga xabar yubor: …» desa DARHOL shu asbobni chaqiring — find_employee kerak emas: employee_name ga foydalanuvchi aytgan ismni AYNAN uzating, server o\'zi topadi va tasdiq oynasini (kimga, qanday matn, Yuborish/Bekor tugmalari) ko\'rsatadi. text — xabar matni, aynan foydalanuvchi aytganidek (o\'zgartirmang, tarjima qilmang). Javobingizda faqat bir jumla yozing; kimga ketishini o\'zingiz aytmang — server ko\'rsatadi.',
+      parameters: { type: 'object', properties: { employee_name: { type: 'string', description: 'Xodimning ismi/familiyasi foydalanuvchi aytganidek' }, text: { type: 'string' } }, required: ['employee_name', 'text'] } } },
   { type: 'function', function: { name: 'get_employee_day', description: 'BITTA xodimning BITTA kundagi holati (bugun keldimi, kecha nima bo\'lgan): present / half_day / absent / vacation / sick / bs / unmarked. Табельдан to\'g\'ridan-to\'g\'ri, keshsiz o\'qiladi. "X bugun keldimi?" kabi savollarda AYNAN shu asbobni ishlating. days_ago: 0=bugun, 1=kecha.',
       parameters: { type: 'object', properties: { pinfl: { type: 'string' }, days_ago: { type: 'integer', minimum: 0, maximum: 60 } }, required: ['pinfl', 'days_ago'] } } },
   { type: 'function', function: { name: 'get_daily_attendance', description: 'Butun zavod bo\'yicha bir kunlik davomat: bo\'limlar kesimida kelgan/kelmagan soni va kelmaganlar ismi. days_ago: 0=bugun, 1=kecha …',
@@ -1358,11 +1359,17 @@ function aiTool(name, a) {
     case 'prepare_message': {
       if (String(AI_CTX.uid) !== String(prop('ADMIN_ID'))) return { error: 'forbidden', hint: 'Xabar yuborish faqat admin uchun' };
       var txt = String(a.text || '').trim(); if (!txt) return { error: 'empty_text' };
-      var ex = findByPinfl(String(a.pinfl)), fioM = pinflInBase(String(a.pinfl)) || '';
-      if (!ex || !ex.v[T.TG_ID] || ex.v[T.STATUS] !== 'active') return { error: 'not_registered', fio: fioM, hint: 'Xodim botda ro\'yxatdan o\'tmagan — xabar yuborib bo\'lmaydi' };
-      CacheService.getScriptCache().put('msgdraft_' + AI_CTX.uid, JSON.stringify({ pinfl: String(a.pinfl), fio: fioM, tgId: String(ex.v[T.TG_ID]), lang: ex.v[T.LANG] || 'uz', text: txt }), 1800);
-      AI_CTX.draft = true;
-      return { ok: true, to: fioM, text: txt, note: 'Javobda qisqa: kimga va qanday matn yuborilishini ko\'rsating; «Yuborish» tugmasini bosishini ayting.' };
+      var found = aiFindEmployees(String(a.employee_name || ''));
+      if (!found.length) return { error: 'employee_not_found', query: a.employee_name };
+      if (found.length > 1) { // server o'zi tanlash tugmalarini chiqaradi — model taxmin qilmaydi
+        CacheService.getScriptCache().put('msgtext_' + AI_CTX.uid, txt, 1800);
+        AI_CTX.msgPick = found;
+        return { ok: true, multiple: true, candidates: found.map(function (e) { return e.fio; }), note: 'Bir nechta xodim topildi — foydalanuvchiga tanlash tugmalari ko\'rsatiladi. Javobda faqat «Qaysi xodimga?» deb yozing.' };
+      }
+      var dr = makeDraft(AI_CTX.uid, found[0].pinfl, txt);
+      if (dr.error) return dr;
+      AI_CTX.draft = dr;
+      return { ok: true, to: dr.fio, note: 'Tasdiq oynasi (kimga, matn, Yuborish/Bekor) server tomonidan ko\'rsatiladi. Javobda faqat bir qisqa jumla yozing.' };
     }
     case 'get_employee_day': {
       var dt0 = new Date(); dt0.setDate(dt0.getDate() - clampInt(a.days_ago, 0, 60));
@@ -1398,7 +1405,7 @@ function aiSystemPrompt(L, name) {
     "5. Ovozdan tanilgan ismlar noto'g'ri yozilgan bo'lishi mumkin — find_employee taxminiy qidiradi, natijadagi F.I.O. ni javobda to'liq yozing.\n" +
     "6. Ma'lumot yo'q bo'lsa (табель to'ldirilmagan, davr topilmadi) — buni ochiq ayting va mavjud variantlarni taklif qiling.\n" +
     "7. Oy raqamlari odatdagidek: Yanvar=1 … Avgust=8, Sentabr=9, Oktabr=10, Dekabr=12. get_employee_attendance ga oy raqamini yoki nomini bering.\n" +
-    "10. «X ga xabar yubor: …» — find_employee, keyin prepare_message(pinfl, matn). Matnni aynan foydalanuvchi aytganidek uzating. Javobda: kimga va nima yuborilishini ko'rsating — tasdiq tugmalari avtomatik chiqadi.\n" +
+    "10. «X ga xabar yubor: …» — DARHOL prepare_message(employee_name=X, text=matn); find_employee chaqirmang, suhbat tarixidagi ПИНФЛ larni ishlatmang. Kimga ketishini o'zingiz yozmang — server tasdiq oynasini ko'rsatadi. Javob: bitta qisqa jumla.\n" +
     "9. «X bugun/kecha keldimi?» — get_employee_day ishlating (butun zavod ro'yxatidan xulosa chiqarmang). status=unmarked bo'lsa «hali belgilanmagan» deng, «kelmagan» emas. get_daily_attendance dagi unmarked ham «kelmagan» degani emas.\n" +
     "8. Asbob error qaytarsa — javobda error kodini emas, sababini odam tilida yozing (masalan «Avgust uchun табель hali to'ldirilmagan»). «Topilmadi» deb aytishdan oldin find_employee natijasidagi pinfl ni to'g'ri uzatganingizga ishonch hosil qiling.";
 }
@@ -1412,9 +1419,9 @@ function openai(path, payload, isBlobForm) {
   return JSON.parse(body);
 }
 /** Savolga javob: model → asboblar → matn. Xatolarda tashlaydi. */
-var AI_CTX = { uid: null, draft: false };
+var AI_CTX = { uid: null, draft: null, msgPick: null };
 function aiAnswer(uid, question, L, name) {
-  AI_CTX = { uid: uid, draft: false };
+  AI_CTX = { uid: uid, draft: null, msgPick: null };
   var hist = aiHistGet(uid);
   var messages = [{ role: 'system', content: aiSystemPrompt(L, name) }].concat(hist, [{ role: 'user', content: question }]);
   var used = [], cands = null; // bir nechta xodim topilsa — tugma sifatida taklif qilamiz
@@ -1426,7 +1433,7 @@ function aiAnswer(uid, question, L, name) {
       var text = String(msg.content || '').trim();
       if (!text) text = (AI_MSG[L] || AI_MSG.uz).err;
       aiHistPut(uid, hist.concat([{ role: 'user', content: question }, { role: 'assistant', content: text }]));
-      return { text: text, tools: used, candidates: cands && cands.length > 1 ? cands : null, draft: AI_CTX.draft };
+      return { text: text, tools: used, candidates: cands && cands.length > 1 ? cands : null, draft: AI_CTX.draft, msgPick: AI_CTX.msgPick };
     }
     msg.tool_calls.forEach(function (tc) {
       var args = {}; try { args = JSON.parse(tc.function.arguments || '{}'); } catch (e) {}
@@ -1446,6 +1453,26 @@ function aiTranscribe(fileId) {
   var r = openai('audio/transcriptions', { file: blob, model: prop('AI_STT_MODEL') || 'gpt-4o-mini-transcribe', prompt: 'SMT zavodi, xodimlar, oylik, davomat, табель, прогул. Familiyalar: o\'zbekcha.' }, true);
   return String(r.text || '').trim();
 }
+/** Xabar qoralamasi: qabul qiluvchi Telegram varag'idan (ПИНФЛ → TG_ID, faqat active) aniqlanadi */
+function makeDraft(uid, pinfl, txt) {
+  var ex = findByPinfl(String(pinfl)), fioM = pinflInBase(String(pinfl)) || '';
+  if (!ex || !ex.v[T.TG_ID] || ex.v[T.STATUS] !== 'active') return { error: 'not_registered', fio: fioM, hint: 'Xodim botda ro\'yxatdan o\'tmagan — xabar yuborib bo\'lmaydi' };
+  var d = { pinfl: String(pinfl), fio: fioM, tgId: String(ex.v[T.TG_ID]), tgName: String(ex.v[T.NAME] || ''), lang: ex.v[T.LANG] || 'uz', text: txt };
+  CacheService.getScriptCache().put('msgdraft_' + uid, JSON.stringify(d), 1800);
+  return d;
+}
+function draftPreview(d) {
+  return '📩 <b>Xabar yuborish</b>\n\nKimga: <b>' + esc(d.fio) + '</b>' + (d.tgName ? ' (Telegram: ' + esc(d.tgName) + ')' : '') + '\nПИНФЛ: <code>' + d.pinfl + '</code>\n\nMatn:\n<i>' + esc(d.text) + '</i>';
+}
+function msgPickKb(c) { return { inline_keyboard: c.slice(0, 8).map(function (e) { return [{ text: (e.fio + (e.position ? ' · ' + e.position : '')).slice(0, 60), callback_data: 'smp:' + e.pinfl }]; }) }; }
+/** Xabar uchun xodim tugma bilan tanlandi */
+function pickMsgRecipient(uid, chat, q) {
+  var txt = CacheService.getScriptCache().get('msgtext_' + uid);
+  if (!txt) return send(chat, '⚠️ Xabar matni topilmadi (30 daqiqa o\'tgan). Qaytadan yozing.', mainMenu('uz'));
+  var d = makeDraft(uid, q.data.split(':')[1], txt);
+  if (d.error) return send(chat, '⚠️ ' + esc(d.fio || '') + ' botda ro\'yxatdan o\'tmagan — xabar yuborib bo\'lmaydi.', mainMenu('uz'));
+  return send(chat, draftPreview(d), msgConfirmKb());
+}
 function msgConfirmKb() { return { inline_keyboard: [[{ text: '✅ Yuborish', callback_data: 'sm:yes' }, { text: '❌ Bekor', callback_data: 'sm:no' }]] }; }
 /** Admin «Yuborish» ni bosdi — xabar xodimga ketadi */
 function sendDraftMessage(uid, chat, q) {
@@ -1454,10 +1481,18 @@ function sendDraftMessage(uid, chat, q) {
   if (q.data === 'sm:no') { CacheService.getScriptCache().remove('msgdraft_' + uid); return done('❌ Bekor qilindi'); }
   if (!raw) return done('⚠️ Xabar topilmadi (30 daqiqa o\'tgan). Qaytadan yozing.');
   var d = JSON.parse(raw); CacheService.getScriptCache().remove('msgdraft_' + uid);
+  var exNow = findByPinfl(d.pinfl); // yuborish paytida qayta tekshiruv: ПИНФЛ → hozirgi Telegram ID
+  if (!exNow || String(exNow.v[T.TG_ID]) !== d.tgId || exNow.v[T.STATUS] !== 'active') return done('⚠️ Qabul qiluvchi ma\'lumoti o\'zgargan — yuborilmadi. Qaytadan yozing.');
   var Lr = MSG[d.lang] ? d.lang : 'uz';
   var res = null; try { res = send(d.tgId, '<b>' + MSG[Lr].from_mgmt + '</b>\n\n' + esc(d.text)); } catch (e) {}
   logAction(uid, d.pinfl, 'msg_to_employee:' + (res && res.ok ? 'ok' : 'fail'));
   return done(res && res.ok ? '✅ Yuborildi → ' + esc(d.fio) : '⚠️ Yetib bormadi (xodim botni bloklagan bo\'lishi mumkin)');
+}
+/** AI javobini yetkazish: xabar qoralamasi bo'lsa — server tuzgan tasdiq oynasi (modelga bog'liq emas) */
+function aiDeliver(chat, heard, ans, L) {
+  if (ans.draft) { if (heard) send(chat, heard.trim()); return send(chat, draftPreview(ans.draft), msgConfirmKb()); }
+  if (ans.msgPick) return send(chat, heard + '📩 Qaysi xodimga yuboray?', msgPickKb(ans.msgPick));
+  return send(chat, heard + esc(ans.text), aiCandidatesKb(ans.candidates) || mainMenu(L));
 }
 function aiCandidatesKb(c) {
   if (!c) return null;
@@ -1470,11 +1505,27 @@ function aiPick(uid, chat, q, L) {
   try {
     var ans = aiAnswer(uid, 'Xodim tanlandi: ' + fio + ' (ПИНФЛ ' + pinfl + '). Oldingi savolimga shu xodim uchun javob ber; find_employee chaqirish shart emas, pinfl ni to\'g\'ridan-to\'g\'ri ishlat.', L, q.from.first_name || '');
     logAction(uid, pinfl, 'ai_pick [' + ans.tools.join(',') + ']');
-    return send(chat, esc(ans.text), ans.draft ? msgConfirmKb() : (aiCandidatesKb(ans.candidates) || mainMenu(L)));
+    return aiDeliver(chat, '', ans, L);
   } catch (e) {
     try { send(prop('ADMIN_ID'), '⚠️ AI xatosi: ' + esc(String(e).slice(0, 500))); } catch (x) {}
     return send(chat, A.err, mainMenu(L));
   }
+}
+/** «X ga xabar yubor: matn» — modelsiz, to'g'ridan-to'g'ri (admin). Mos kelmasa null. */
+var MSG_INTENT = /^(.+?)\s*(?:ga|га|ге|ka|qa)?\s+(?:xabar|хабар|сообщение)\s+(?:yubor(?:ing)?|юбор(?:инг)?|jo['ʼ’]?nat(?:ing)?|жў?нат(?:инг)?|отправ(?:ь|ить|ьте)|напиши(?:те)?)\s*[:\-—,]\s*(.+)$/i;
+var MSG_INTENT_RU = /^(?:отправ(?:ь|ить|ьте)|напиши(?:те)?|пошли)\s+(?:сообщение\s+)?(.+?)\s*[:\-—]\s*(.+)$/i;
+function tryDirectMessage(uid, chat, question) {
+  if (String(uid) !== String(prop('ADMIN_ID'))) return null;
+  var qn = String(question || '').trim(), m = qn.match(MSG_INTENT) || qn.match(MSG_INTENT_RU); if (!m) return null;
+  var name = m[1].replace(/\s+(ga|га|ге)$/i, '').replace(/(ов|ев|ова|ева)(у|е|ой)$/i, '$1').trim(), txt = m[2].trim();
+  if (!name || !txt) return null;
+  var found = aiFindEmployees(name);
+  if (!found.length) return send(chat, '⚠️ «' + esc(name) + '» bo\'yicha xodim topilmadi.', mainMenu('uz'));
+  if (found.length > 1) { CacheService.getScriptCache().put('msgtext_' + uid, txt, 1800); return send(chat, '📩 Qaysi xodimga yuboray?', msgPickKb(found)); }
+  var d = makeDraft(uid, found[0].pinfl, txt);
+  if (d.error) return send(chat, '⚠️ ' + esc(d.fio || name) + ' botda ro\'yxatdan o\'tmagan — xabar yuborib bo\'lmaydi.', mainMenu('uz'));
+  logAction(uid, d.pinfl, 'msg_draft_direct');
+  return send(chat, draftPreview(d), msgConfirmKb());
 }
 /** handleMessage dan chaqiriladi: matn yoki ovoz → javob */
 function aiHandle(uid, chat, m, text, L, mgrName) {
@@ -1488,9 +1539,11 @@ function aiHandle(uid, chat, m, text, L, mgrName) {
       if (!question) return send(chat, A.noVoice, mainMenu(L));
       heard = A.heard + '<i>' + esc(question) + '</i>\n\n';
     }
+    if (heard) { var dm0 = tryDirectMessage(uid, chat, question); if (dm0) { send(chat, heard.trim()); return dm0; } }
+    else { var dm = tryDirectMessage(uid, chat, question); if (dm) return dm; }
     var ans = aiAnswer(uid, question, L, mgrName);
     logAction(uid, '', 'ai:' + question.slice(0, 80) + ' [' + ans.tools.join(',') + ']');
-    return send(chat, heard + esc(ans.text), ans.draft ? msgConfirmKb() : (aiCandidatesKb(ans.candidates) || mainMenu(L)));
+    return aiDeliver(chat, heard, ans, L);
   } catch (e) {
     try { send(prop('ADMIN_ID'), '⚠️ AI xatosi: ' + esc(String(e).slice(0, 500))); } catch (x) {}
     return send(chat, heard + A.err, mainMenu(L));
