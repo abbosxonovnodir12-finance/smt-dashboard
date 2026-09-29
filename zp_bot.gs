@@ -47,7 +47,7 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-09-29.1';
+var BOT_VERSION = '2026-09-29.2';
 var API_CACHE_SEC = 900; // Mini App ma'lumotlari keshi (soniya); warmApiCache() har 5 daqiqada yangilab turadi
 var WARM_MINUTES = 5;
 var REPORT_HOUR = 10;
@@ -389,6 +389,10 @@ function handleMessage(m) {
     if (text === '/pending') return adminPending(chat);
     if (text.indexOf('/broadcast') === 0) return adminBroadcast(uid, chat, text.replace('/broadcast', '').trim());
     if (text === '/admin') return send(chat, ADMIN_HELP);
+    if (text === '/chart') { // diagramma diagnostikasi: xatoni to'liq ko'rsatadi
+      try { var dtest = dailyData(0); if (!dtest.filled) return send(chat, 'Bugungi табель to\'ldirilmagan — diagramma uchun ma\'lumot yo\'q.'); var bl = dailyChartBlob(dtest, 'uz'); var rr = tg('sendPhoto', { chat_id: String(chat), photo: bl, caption: 'test' }, true); return send(chat, rr && rr.ok ? '✅ Diagramma ishlaydi' : '⚠️ sendPhoto: ' + esc(JSON.stringify(rr).slice(0, 500))); }
+      catch (e) { return send(chat, '⚠️ Diagramma xatosi: ' + esc(String(e))); }
+    }
     if (text.indexOf('/find ') === 0) { // diagnostika: AI ism qidiruvi nimani topadi
       var fr = aiFindEmployees(text.slice(6));
       return send(chat, fr.length ? fr.map(function (e) { return '• ' + esc(e.fio) + ' — ' + esc(e.position) + ' <code>' + e.pinfl + '</code>'; }).join('\n') : 'Topilmadi: ' + esc(text.slice(6)));
@@ -1231,24 +1235,26 @@ function tabelData(pinfl, midx) {
 var CHART_COLORS = { p: '#2E7D32', a: '#C62828', u: '#9E9E9E' }; // holat ranglari: kelgan / kelmagan / belgilanmagan
 function dailyChartConfig(d, L) {
   var secs = d.sections.filter(function (x) { return x.n > 0; });
-  var labels = secs.map(function (x) { return x.name.length > 28 ? x.name.slice(0, 27) + '…' : x.name; });
+  // Bo'lim nomi + jami xodim — o'q yozuvida (qo'shimcha plagin kerak emas)
+  var labels = secs.map(function (x) { var n = x.name.length > 26 ? x.name.slice(0, 25) + '…' : x.name; return n + '  (' + x.n + ')'; });
   var date = (d.date[2] < 10 ? '0' : '') + d.date[2] + '.' + (d.date[1] < 9 ? '0' : '') + (d.date[1] + 1) + '.' + d.date[0];
   var t = d.total, pct = t.n ? Math.round(100 * t.w / t.n) : 0;
   var sub = MSG[L].d_total + ' ' + t.n + ' · ' + MSG[L].d_present + ' ' + t.w + ' (' + pct + '%) · ' + MSG[L].d_absent + ' ' + t.a + (t.u ? ' · ' + MSG[L].d_unmarked + ' ' + t.u : '');
-  var ds = function (key, label, color) { return { label: label, data: secs.map(function (x) { return x[key]; }), backgroundColor: color, borderColor: '#ffffff', borderWidth: 1, borderRadius: 3, barPercentage: 0.7, categoryPercentage: 0.85 }; };
+  // 0 qiymat → null: Chart.js segmentni ham, yozuvni ham chizmaydi (formatter funksiyasi kerak emas)
+  var ds = function (key, label, color) { return { label: label, data: secs.map(function (x) { return x[key] > 0 ? x[key] : null; }), backgroundColor: color, borderColor: '#ffffff', borderWidth: 1, borderRadius: 3, barPercentage: 0.7, categoryPercentage: 0.85 }; };
   return {
-    width: 900, height: Math.max(320, 170 + secs.length * 34), totals: secs.map(function (x) { return x.n; }),
+    width: 900, height: Math.max(320, 170 + secs.length * 34),
     chart: {
       type: 'bar',
       data: { labels: labels, datasets: [ds('w', MSG[L].d_legend_p, CHART_COLORS.p), ds('a', MSG[L].d_legend_a, CHART_COLORS.a), ds('u', MSG[L].d_legend_u, CHART_COLORS.u)] },
       options: {
         indexAxis: 'y', responsive: false, animation: false,
-        layout: { padding: { right: 56, left: 8, top: 8, bottom: 8 } },
+        layout: { padding: { right: 24, left: 8, top: 8, bottom: 8 } },
         plugins: {
           title: { display: true, text: MSG[L].daily_title.replace(/^📊\s*/, '') + ' — ' + date, font: { size: 22, weight: '600' }, color: '#111111', padding: { bottom: 2 } },
           subtitle: { display: true, text: sub, font: { size: 14 }, color: '#555555', padding: { bottom: 14 } },
           legend: { position: 'top', align: 'end', labels: { boxWidth: 12, boxHeight: 12, font: { size: 13 }, color: '#333333' } },
-          datalabels: { color: '#ffffff', font: { size: 12, weight: '600' }, formatter: '__FMT__' }
+          datalabels: { color: '#ffffff', font: { size: 12, weight: '600' }, display: 'auto' }
         },
         scales: {
           x: { stacked: true, grid: { color: '#EEEEEE' }, ticks: { color: '#777777', font: { size: 12 }, precision: 0 }, border: { display: false } },
@@ -1258,21 +1264,14 @@ function dailyChartConfig(d, L) {
     }
   };
 }
-/** Chart.js konfiguratsiyasi JS matni ko'rinishida (funksiyalar bilan) — QuickChart "chart" maydoni JS qabul qiladi */
-function dailyChartJs(cfg) {
-  var js = JSON.stringify(cfg.chart)
-    .replace('"__FMT__"', 'function(v){return v>0?v:"";}');
-  // o'ng tomonda bo'lim yakuni (jami xodim) — kichik plagin
-  var totals = JSON.stringify(cfg.totals);
-  js = js.slice(0, -1) + ',"plugins":[{"id":"totals","afterDatasetsDraw":function(c){var ctx=c.ctx,m=c.getDatasetMeta(0),tot=' + totals + ',xs=c.scales.x;ctx.save();ctx.font="600 13px sans-serif";ctx.fillStyle="#222222";ctx.textBaseline="middle";ctx.textAlign="left";m.data.forEach(function(b,i){ctx.fillText(String(tot[i]),xs.getPixelForValue(tot[i])+6,b.y);});ctx.restore();}}]}';
-  return js;
-}
 function dailyChartBlob(d, L) {
   var cfg = dailyChartConfig(d, L);
-  var body = JSON.stringify({ version: '4', width: cfg.width, height: cfg.height, backgroundColor: '#ffffff', devicePixelRatio: 2, format: 'png', chart: dailyChartJs(cfg) });
+  var body = JSON.stringify({ version: '4', width: cfg.width, height: cfg.height, backgroundColor: '#ffffff', devicePixelRatio: 2, format: 'png', chart: cfg.chart }); // toza JSON, funksiyalarsiz
   var res = UrlFetchApp.fetch('https://quickchart.io/chart', { method: 'post', contentType: 'application/json', payload: body, muteHttpExceptions: true });
-  if (res.getResponseCode() !== 200) throw new Error('QuickChart HTTP ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200));
-  return res.getBlob().setName('davomat.png');
+  if (res.getResponseCode() !== 200) throw new Error('QuickChart HTTP ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 300));
+  var blob = res.getBlob();
+  if (String(blob.getContentType()).indexOf('image') < 0) throw new Error('QuickChart rasm qaytarmadi: ' + res.getContentText().slice(0, 200));
+  return blob.setName('davomat.png');
 }
 function dailyCaption(d, L) {
   var lines = [];
@@ -1282,6 +1281,10 @@ function dailyCaption(d, L) {
   });
   var cap = lines.length ? '<b>' + MSG[L].d_absent_list + ':</b>\n' + lines.join('\n') : '';
   return cap.length > 1000 ? cap.slice(0, 990) + '…' : cap;
+}
+function chartFail(msg) { // sababi adminga (soatiga 1 martadan ko'p emas)
+  Logger.log('Diagramma xatosi: ' + msg);
+  try { var c = CacheService.getScriptCache(); if (!c.get('chart_err')) { c.put('chart_err', '1', 3600); send(prop('ADMIN_ID'), '⚠️ Diagramma chizilmadi, matn yuborildi. Sabab: ' + esc(msg)); } } catch (e) {}
 }
 /** Kunlik davomatni diagramma bilan yuboradi; diagramma chizilmasa — matnli hisobot */
 function sendDaily(chat, L, daysAgo, kb) {
@@ -1295,8 +1298,8 @@ function sendDaily(chat, L, daysAgo, kb) {
       if (kb) p.reply_markup = JSON.stringify(kb);
       var r = tg('sendPhoto', p, true);
       if (r && r.ok) return r;
-      Logger.log('sendPhoto xato: ' + JSON.stringify(r));
-    } catch (e) { Logger.log('Diagramma xatosi: ' + e); }
+      chartFail('sendPhoto: ' + JSON.stringify(r).slice(0, 300));
+    } catch (e) { chartFail(String(e)); }
   }
   return send(chat, buildDailyReport(L, daysAgo), kb); // fallback: matn
 }
