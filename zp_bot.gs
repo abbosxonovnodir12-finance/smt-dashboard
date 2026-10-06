@@ -20,6 +20,8 @@ var SHEET_LOG  = 'Log';
 var SHEET_BONUS = 'надбавка';   // qo'shimcha to'lov varag'i (A ПИНФЛ, G..W oylar/kvartal, W Итог)
 var BONUS_YEAR = '2026';
 var SHEET_NAMES = 'ФИО табель';    // ПИНФЛ -> Табельдаги Ф.И.О. mosligi
+var SHEET_DEBT = 'qarz_daftari';   // xodimlar qarzlari: har qator — bitta qarz
+var DB = { PINFL: 0, FIO: 1, AMOUNT: 4, CUR: 5, MONTHLY: 6, PERIODS: 7, ISSUED: 8, DUE: 9, NOTE: 10, SRC: 11, PAID: 12, REST: 13, STATUS: 14, P1: 15, TOTAL: 27 };
 // Табель: Script property TABEL_ID (fayl ID). Har oy = varaq. B ФИО, D dan boshlab har kun 2 ustun (belgi, qo'shimcha soat)
 var TAB = { FIO: 1, DAY0: 3 }; // EXTRA/DAYS ustunlari oy uzunligiga bog'liq — tabCols(midx) orqali olinadi
 var TABEL_YEAR = 2026; // Табель fayli qaysi yil uchun (TABEL_ID shu yilga tegishli)
@@ -47,7 +49,7 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-09-29.2';
+var BOT_VERSION = '2026-10-06.1';
 var API_CACHE_SEC = 900; // Mini App ma'lumotlari keshi (soniya); warmApiCache() har 5 daqiqada yangilab turadi
 var WARM_MINUTES = 5;
 var REPORT_HOUR = 10;
@@ -71,6 +73,8 @@ var MSG = {
     rejected: "❌ Admin so'rovingizni rad etdi. Savollar bo'lsa HR ga murojaat qiling.",
     unlinked: "Sizning bog'lanishingiz admin tomonidan bekor qilindi. Qayta ro'yxatdan o'tish uchun /start bosing.",
     menu: "Kerakli bo'limni tanlang:",
+    btn_debt: "💳 Qarz daftari", debt_title: "💳 Qarz daftari", debt_none: "Sizda qarz yozuvi yo'q ✅", debt_open: "Ochiq", debt_closed: "Yopilgan", debt_amount: "Qarz", debt_monthly: "Oylik to'lov", debt_periods: "Muddat", debt_months: "oy",
+    debt_issued: "Berilgan", debt_due: "Yopilish sanasi", debt_paid: "To'langan", debt_rest: "Qoldiq", debt_src: "Manba", debt_total_rest: "JAMI QOLDIQ", debt_payments: "To'lovlar", debt_period: "davr", debt_no_open: "Ochiq qarz yo'q ✅", debt_closed_n: "yopilgan qarz",
     btn_me: "👤 Shaxsiy ma'lumot", me_title: "👤 Shaxsiy ma'lumot", me_fio: "F.I.O.", me_pos: "Lavozim", me_type: "Toifa",
     me_hired: "Ishga qabul qilingan", me_tenure: "Ish staji (shu korxonada)", me_salary: "Oklad", me_asof: "Oxirgi yangilanish",
     y: "yil", mo: "oy", d: "kun",
@@ -115,6 +119,8 @@ var MSG = {
     rejected: "❌ Админ отклонил ваш запрос. По вопросам обращайтесь в HR.",
     unlinked: "Ваша привязка отменена админом. Для повторной регистрации нажмите /start.",
     menu: "Выберите раздел:",
+    btn_debt: "💳 Долги", debt_title: "💳 Долговая книга", debt_none: "Записей о долгах нет ✅", debt_open: "Открыт", debt_closed: "Закрыт", debt_amount: "Долг", debt_monthly: "Ежемесячный платёж", debt_periods: "Срок", debt_months: "мес.",
+    debt_issued: "Выдан", debt_due: "Дата погашения", debt_paid: "Погашено", debt_rest: "Остаток", debt_src: "Источник", debt_total_rest: "ИТОГО ОСТАТОК", debt_payments: "Платежи", debt_period: "период", debt_no_open: "Открытых долгов нет ✅", debt_closed_n: "закрытых",
     btn_me: "👤 Мои данные", me_title: "👤 Мои данные", me_fio: "Ф.И.О.", me_pos: "Должность", me_type: "Тип",
     me_hired: "Дата приёма", me_tenure: "Стаж (на предприятии)", me_salary: "Оклад", me_asof: "Данные на",
     y: "г.", mo: "мес.", d: "дн.",
@@ -291,14 +297,14 @@ function isManager(rec, uid) {
 }
 function mainMenu(L, mgr) {
   if (mgr === undefined) mgr = MGR;
-  var kb = [[MSG[L].btn_salary, MSG[L].btn_bonus], [MSG[L].btn_tabel, MSG[L].btn_me]];
+  var kb = [[MSG[L].btn_salary, MSG[L].btn_bonus], [MSG[L].btn_tabel, MSG[L].btn_me], [MSG[L].btn_debt]];
   if (mgr) { kb.push([MSG[L].btn_daily, MSG[L].btn_lookup]); if (prop('MINIAPP_URL')) kb.push([MSG[L].btn_dash]); }
   kb.push([MSG[L].btn_lang, MSG[L].btn_request]);
   return { keyboard: kb, resize_keyboard: true };
 }
 function backKb(L) { return { keyboard: [[MSG[L].btn_back]], resize_keyboard: true }; }
 // Matn asosiy menyu tugmasimi (ikkala tilda) — matn kiritish bosqichida bosilsa, ariza/qidiruv sifatida ketmasin
-var MENU_KEYS = ['btn_salary', 'btn_bonus', 'btn_tabel', 'btn_me', 'btn_daily', 'btn_lookup', 'btn_dash', 'btn_lang', 'btn_request', 'btn_back'];
+var MENU_KEYS = ['btn_salary', 'btn_bonus', 'btn_tabel', 'btn_me', 'btn_debt', 'btn_daily', 'btn_lookup', 'btn_dash', 'btn_lang', 'btn_request', 'btn_back'];
 function isMenuText(text) {
   for (var i = 0; i < MENU_KEYS.length; i++) if (text === MSG.uz[MENU_KEYS[i]] || text === MSG.ru[MENU_KEYS[i]]) return true;
   return false;
@@ -461,6 +467,7 @@ function handleMessage(m) {
   if (text === MSG.uz.btn_bonus || text === MSG.ru.btn_bonus) return showBonus(chat, rec, L);
   if (text === MSG.uz.btn_tabel || text === MSG.ru.btn_tabel) return showTabelMonths(chat, rec, L);
   if (text === MSG.uz.btn_me || text === MSG.ru.btn_me) return showMe(chat, rec, L);
+  if (text === MSG.uz.btn_debt || text === MSG.ru.btn_debt) { logAction(uid, String(rec.v[T.PINFL]).trim(), 'debt'); return send(chat, debtReport(String(rec.v[T.PINFL]).trim(), L), mainMenu(L)); }
   if (text === MSG.uz.btn_lang || text === MSG.ru.btn_lang) return send(chat, MSG[L].choose_lang, langKb());
   if (text === MSG.uz.btn_request || text === MSG.ru.btn_request) { setState(uid, { step: 'request', lang: L }); return send(chat, MSG[L].ask_request, backKb(L)); }
   return send(chat, MSG[L].menu, mainMenu(L));
@@ -534,7 +541,7 @@ function closePicker(q) {
     tg('editMessageText', { chat_id: q.message.chat.id, message_id: q.message.message_id, text: esc(base) + (label ? ' <b>' + esc(label) + '</b>' : ''), parse_mode: 'HTML' });
   } catch (e) {}
 }
-var PICKERS = { lang: 1, month: 1, tab: 1, mp: 1, ms: 1, mt: 1, mm: 1, mtab: 1, aip: 1, smp: 1 };
+var PICKERS = { lang: 1, month: 1, tab: 1, mp: 1, ms: 1, mt: 1, mm: 1, mtab: 1, md: 1, aip: 1, smp: 1 };
 function handleCallback(q) {
   var uid = q.from.id, chat = q.message.chat.id, data = q.data || '';
   tg('answerCallbackQuery', { callback_query_id: q.id });
@@ -545,13 +552,14 @@ function handleCallback(q) {
   if (parts[0] === 'aip') { if (!MGR) return; return aiPick(uid, chat, q, (recQ && recQ.v[T.LANG]) || 'uz'); }
   if (parts[0] === 'sm') { if (String(uid) !== String(prop('ADMIN_ID'))) return; return sendDraftMessage(uid, chat, q); }
   if (parts[0] === 'smp') { if (String(uid) !== String(prop('ADMIN_ID'))) return; return pickMsgRecipient(uid, chat, q); }
-  if (parts[0] === 'day' || parts[0] === 'mon' || parts[0] === 'mp' || parts[0] === 'ms' || parts[0] === 'mt' || parts[0] === 'mm' || parts[0] === 'mtab') {
+  if (parts[0] === 'day' || parts[0] === 'mon' || parts[0] === 'mp' || parts[0] === 'ms' || parts[0] === 'mt' || parts[0] === 'mm' || parts[0] === 'mtab' || parts[0] === 'md') {
     if (!MGR) return;
     var Lq = (recQ && recQ.v[T.LANG]) || 'uz';
     if (parts[0] === 'day') return sendDaily(chat, Lq, Number(parts[1]), mainMenu(Lq));
     if (parts[0] === 'mon') return send(chat, buildMonthlyReport(Lq, Number(parts[1])), mainMenu(Lq));
     if (parts[0] === 'mp') return send(chat, esc(pinflInBase(parts[1]) || '') + '\n' + MSG[Lq].what_show,
-      { inline_keyboard: [[{ text: MSG[Lq].btn_salary, callback_data: 'ms:' + parts[1] }, { text: MSG[Lq].btn_tabel, callback_data: 'mt:' + parts[1] }]] });
+      { inline_keyboard: [[{ text: MSG[Lq].btn_salary, callback_data: 'ms:' + parts[1] }, { text: MSG[Lq].btn_tabel, callback_data: 'mt:' + parts[1] }], [{ text: MSG[Lq].btn_debt, callback_data: 'md:' + parts[1] }]] });
+    if (parts[0] === 'md') { logAction(uid, parts[1], 'mgr_debt'); return send(chat, debtReport(parts[1], Lq), mainMenu(Lq)); }
     if (parts[0] === 'ms') { logAction(uid, parts[1], 'mgr_pick'); return send(chat, MSG[Lq].choose_month, monthsKb(parts[1], 'mm:' + parts[1]) || { inline_keyboard: [] }); }
     if (parts[0] === 'mt') return send(chat, MSG[Lq].choose_month, tabelMonthsKb(Lq, 'mtab:' + parts[1]));
     if (parts[0] === 'mtab') { logAction(uid, parts[1], 'mgr_tabel'); return send(chat, tabelReport(parts[1], Number(parts[2]), Lq), mainMenu(Lq)); }
@@ -1230,6 +1238,51 @@ function tabelData(pinfl, midx) {
 }
 
 // =====================================================================
+// Qarz daftari (qarz_daftari varag'i)
+// =====================================================================
+function numVal(v) { if (typeof v === 'number') return v; var n = parseFloat(String(v == null ? '' : v).replace(/\s|\u00a0/g, '').replace(',', '.')); return isNaN(n) ? 0 : n; }
+function fmtMoney(v, cur) { var c = String(cur || '').toLowerCase(); var usd = c.indexOf('usd') >= 0 || c.indexOf('$') >= 0 || c.indexOf('долл') >= 0; var n = numVal(v); return fmtNum(n, usd && n % 1 ? 2 : 0) + ' ' + (usd ? 'USD' : "so'm"); }
+function fmtD(v) { var d = parseDate(v); return d ? Utilities.formatDate(d, Session.getScriptTimeZone(), 'dd.MM.yyyy') : String(v || '—'); }
+/** Xodimning barcha qarz yozuvlari (ПИНФЛ bo'yicha) */
+function debtRows(pinfl) {
+  var sh = SpreadsheetApp.getActive().getSheetByName(SHEET_DEBT);
+  if (!sh || sh.getLastRow() < 2) return [];
+  var vals = sh.getRange(2, 1, sh.getLastRow() - 1, DB.TOTAL + 1).getValues(), out = [];
+  for (var i = 0; i < vals.length; i++) if (String(vals[i][DB.PINFL]).trim() === String(pinfl)) out.push(vals[i]);
+  return out;
+}
+function debtIsOpen(r) { var st = String(r[DB.STATUS] || '').toLowerCase(); return st.indexOf('закр') < 0 && st.indexOf('yop') < 0 && st.indexOf('закрыт') < 0; }
+function debtItem(r) {
+  var pays = []; for (var k = 0; k < 12; k++) { var v = r[DB.P1 + k]; if (v !== '' && v !== null && numVal(v) !== 0) pays.push({ period: k + 1, amount: numVal(v) }); }
+  return { amount: numVal(r[DB.AMOUNT]), currency: String(r[DB.CUR] || ''), monthly: numVal(r[DB.MONTHLY]), periods: numVal(r[DB.PERIODS]), issued: fmtD(r[DB.ISSUED]), due: fmtD(r[DB.DUE]),
+    note: String(r[DB.NOTE] || ''), source: String(r[DB.SRC] || ''), paid: numVal(r[DB.PAID]), rest: numVal(r[DB.REST]), status: String(r[DB.STATUS] || ''), open: debtIsOpen(r), payments: pays };
+}
+function debtData(pinfl) {
+  var rows = debtRows(pinfl), items = rows.map(debtItem), restByCur = {};
+  items.forEach(function (d) { if (d.open) { var c = /usd|\$|долл/i.test(d.currency) ? 'USD' : 'UZS'; restByCur[c] = (restByCur[c] || 0) + d.rest; } });
+  return { fio: rows.length ? String(rows[0][DB.FIO]) : (pinflInBase(String(pinfl)) || ''), count: items.length, open_count: items.filter(function (d) { return d.open; }).length, total_rest: restByCur, debts: items };
+}
+function debtReport(pinfl, L) {
+  var M = MSG[L], d = debtData(pinfl);
+  if (!d.count) return '<b>' + M.debt_title + '</b>\n' + esc(d.fio) + '\n\n' + M.debt_none;
+  var lines = ['<b>' + M.debt_title + '</b>', esc(d.fio), ''];
+  var open = d.debts.filter(function (x) { return x.open; }), closed = d.debts.filter(function (x) { return !x.open; });
+  if (!open.length) lines.push(M.debt_no_open, '');
+  open.forEach(function (x, i) {
+    lines.push('<b>' + (i + 1) + '. ' + fmtMoney(x.amount, x.currency) + '</b>' + (x.note ? ' — ' + esc(x.note) : '') + ' <i>(' + M.debt_open + ')</i>');
+    lines.push('   ' + M.debt_monthly + ': ' + fmtMoney(x.monthly, x.currency) + ' · ' + M.debt_periods + ': ' + fmtNum(x.periods, 0) + ' ' + M.debt_months);
+    lines.push('   ' + M.debt_issued + ': ' + esc(x.issued) + ' · ' + M.debt_due + ': ' + esc(x.due) + (x.source ? ' · ' + M.debt_src + ': ' + esc(x.source) : ''));
+    lines.push('   ' + M.debt_paid + ': ' + fmtMoney(x.paid, x.currency) + ' · ' + M.debt_rest + ': <b>' + fmtMoney(x.rest, x.currency) + '</b>');
+    if (x.payments.length) lines.push('   ' + M.debt_payments + ': ' + x.payments.map(function (p) { return p.period + '-' + M.debt_period + ' ' + fmtMoney(p.amount, x.currency); }).join(', '));
+    lines.push('');
+  });
+  var tot = Object.keys(d.total_rest).map(function (c) { return fmtMoney(d.total_rest[c], c); });
+  if (open.length) lines.push('<b>' + M.debt_total_rest + ': ' + tot.join(' + ') + '</b>');
+  if (closed.length) lines.push('', '<i>' + M.debt_closed + ': ' + closed.map(function (x) { return fmtMoney(x.amount, x.currency) + (x.note ? ' (' + esc(x.note) + ')' : '') + ' — ' + esc(x.due); }).join('; ') + '</i>');
+  return lines.join('\n');
+}
+
+// =====================================================================
 // Kunlik davomat — diagramma (PNG). QuickChart.io (Chart.js) orqali chiziladi; ishlamasa matnli hisobot yuboriladi.
 // =====================================================================
 var CHART_COLORS = { p: '#2E7D32', a: '#C62828', u: '#9E9E9E' }; // holat ranglari: kelgan / kelmagan / belgilanmagan
@@ -1370,6 +1423,8 @@ var AI_TOOLS = [
       parameters: { type: 'object', properties: { pinfl: { type: 'string' } }, required: ['pinfl'] } } },
   { type: 'function', function: { name: 'get_bonus', description: 'Xodimning qo\'shimcha to\'lovi (надбавка) — oylar va choraklar bo\'yicha, yil jami.',
       parameters: { type: 'object', properties: { pinfl: { type: 'string' } }, required: ['pinfl'] } } },
+  { type: 'function', function: { name: 'get_debts', description: 'Xodimning qarz daftari: barcha qarzlar (summa, valyuta УзСум/USD, oylik to\'lov, muddat, berilgan/yopilish sanasi, izoh, manba, to\'langan, qoldiq, holat ochiq/yopiq, davrlar bo\'yicha to\'lovlar) va ochiq qarzlar bo\'yicha jami qoldiq valyuta kesimida.',
+      parameters: { type: 'object', properties: { pinfl: { type: 'string' } }, required: ['pinfl'] } } },
   { type: 'function', function: { name: 'get_employee_attendance', description: 'Xodimning bir oylik davomati (табель): ishlangan kunlar, qo\'shimcha soat, ta\'til, kasallik, прогул sanalari. month: 0=Yanvar … 11=Dekabr.',
       parameters: { type: 'object', properties: { pinfl: { type: 'string' }, month: { type: 'string', description: 'Oy raqami "1".."12" (1=Yanvar, 8=Avgust, 9=Sentabr, 12=Dekabr) yoki oy nomi. Foydalanuvchi oy aytmasa — joriy oy.' } }, required: ['pinfl', 'month'] } } },
   { type: 'function', function: { name: 'prepare_message', description: 'Xodimga bot orqali xabar yuborish (faqat admin). Foydalanuvchi «X ga xabar yubor: …» desa DARHOL shu asbobni chaqiring — find_employee kerak emas: employee_name ga foydalanuvchi aytgan ismni AYNAN uzating, server o\'zi topadi va tasdiq oynasini (kimga, qanday matn, Yuborish/Bekor tugmalari) ko\'rsatadi. text — xabar matni, aynan foydalanuvchi aytganidek (o\'zgartirmang, tarjima qilmang). Javobingizda faqat bir jumla yozing; kimga ketishini o\'zingiz aytmang — server ko\'rsatadi.',
@@ -1449,6 +1504,7 @@ function aiTool(name, a) {
       AI_CTX.draft = dr;
       return { ok: true, to: dr.fio, note: 'Tasdiq oynasi (kimga, matn, Yuborish/Bekor) server tomonidan ko\'rsatiladi. Javobda faqat bir qisqa jumla yozing.' };
     }
+    case 'get_debts': return debtData(String(a.pinfl));
     case 'get_employee_day': {
       var dt0 = new Date(); dt0.setDate(dt0.getDate() - clampInt(a.days_ago, 0, 60));
       var mi0 = dt0.getMonth(), day0 = dt0.getDate(), sh0 = tabelSheetFor(dt0.getFullYear(), mi0);
