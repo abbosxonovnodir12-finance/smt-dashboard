@@ -49,10 +49,12 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-10-06.1';
+var BOT_VERSION = '2026-10-22.1';
 var API_CACHE_SEC = 900; // Mini App ma'lumotlari keshi (soniya); warmApiCache() har 5 daqiqada yangilab turadi
 var WARM_MINUTES = 5;
 var REPORT_HOUR = 10;
+var ALERT_HOUR = 18;       // прогул ogohlantirishi soati (табель kun davomida to'ldiriladi)
+var DEBT_REMIND_DAYS = 3;  // qarz yopilish sanasidan necha kun oldin eslatish
 var LOG_KEEP_DAYS = 90;    // Log: shundan eski qatorlar o'chiriladi
 var LOG_MAX_ROWS = 20000;  // Log: shundan ko'p bo'lsa eng eskilari o'chiriladi // kunlik hisobot soati (loyiha vaqt zonasi: Asia/Tashkent)
 
@@ -73,6 +75,10 @@ var MSG = {
     rejected: "❌ Admin so'rovingizni rad etdi. Savollar bo'lsa HR ga murojaat qiling.",
     unlinked: "Sizning bog'lanishingiz admin tomonidan bekor qilindi. Qayta ro'yxatdan o'tish uchun /start bosing.",
     menu: "Kerakli bo'limni tanlang:",
+    cal_wd: ["Du","Se","Ch","Pa","Ju","Sh","Ya"], cal_week: "-hafta", cal_worked: "Ishlangan", cal_half: "Yarim kun", cal_abs: "Прогул", cal_vac: "Ta'til", cal_sick: "Kasallik", cal_bs: "Бс", cal_un: "Belgilanmagan", cal_extra: "Qo'sh. soat",
+    cal_caption: "Sizning {month} oyi davomatingiz. Savollar bo'lsa — HR yoki ✉️ Adminga ariza.",
+    abs_alert: "⚠️ Bugun ({date}) табельда sizga «прогул» belgilandi.\nAgar bu xato deb hisoblasangiz, HR ga murojaat qiling yoki ✉️ Adminga ariza yuboring.",
+    debt_remind: "💳 Eslatma: {date} sanasida {amount} qarz to'lovi muddati tugaydi{note}.\nQoldiq: {rest}.", debt_remind_today: "💳 Bugun ({date}) {amount} qarz to'lovi muddati{note}. Qoldiq: {rest}.",
     btn_debt: "💳 Qarz daftari", debt_title: "💳 Qarz daftari", debt_none: "Sizda qarz yozuvi yo'q ✅", debt_open: "Ochiq", debt_closed: "Yopilgan", debt_amount: "Qarz", debt_monthly: "Oylik to'lov", debt_periods: "Muddat", debt_months: "oy",
     debt_issued: "Berilgan", debt_due: "Yopilish sanasi", debt_paid: "To'langan", debt_rest: "Qoldiq", debt_src: "Manba", debt_total_rest: "JAMI QOLDIQ", debt_payments: "To'lovlar", debt_period: "davr", debt_no_open: "Ochiq qarz yo'q ✅", debt_closed_n: "yopilgan qarz",
     btn_me: "👤 Shaxsiy ma'lumot", me_title: "👤 Shaxsiy ma'lumot", me_fio: "F.I.O.", me_pos: "Lavozim", me_type: "Toifa",
@@ -119,6 +125,10 @@ var MSG = {
     rejected: "❌ Админ отклонил ваш запрос. По вопросам обращайтесь в HR.",
     unlinked: "Ваша привязка отменена админом. Для повторной регистрации нажмите /start.",
     menu: "Выберите раздел:",
+    cal_wd: ["Пн","Вт","Ср","Чт","Пт","Сб","Вс"], cal_week: "-я нед.", cal_worked: "Отработано", cal_half: "Полдня", cal_abs: "Прогул", cal_vac: "Отпуск", cal_sick: "Больничный", cal_bs: "Бс", cal_un: "Не отмечено", cal_extra: "Доп. часы",
+    cal_caption: "Ваш табель за {month}. Вопросы — HR или ✉️ Заявка админу.",
+    abs_alert: "⚠️ Сегодня ({date}) в табеле вам отмечен «прогул».\nЕсли считаете это ошибкой — обратитесь в HR или отправьте ✉️ заявку админу.",
+    debt_remind: "💳 Напоминание: {date} срок платежа по долгу {amount}{note}.\nОстаток: {rest}.", debt_remind_today: "💳 Сегодня ({date}) срок платежа по долгу {amount}{note}. Остаток: {rest}.",
     btn_debt: "💳 Долги", debt_title: "💳 Долговая книга", debt_none: "Записей о долгах нет ✅", debt_open: "Открыт", debt_closed: "Закрыт", debt_amount: "Долг", debt_monthly: "Ежемесячный платёж", debt_periods: "Срок", debt_months: "мес.",
     debt_issued: "Выдан", debt_due: "Дата погашения", debt_paid: "Погашено", debt_rest: "Остаток", debt_src: "Источник", debt_total_rest: "ИТОГО ОСТАТОК", debt_payments: "Платежи", debt_period: "период", debt_no_open: "Открытых долгов нет ✅", debt_closed_n: "закрытых",
     btn_me: "👤 Мои данные", me_title: "👤 Мои данные", me_fio: "Ф.И.О.", me_pos: "Должность", me_type: "Тип",
@@ -785,6 +795,25 @@ function monthlyReport() {
     if (!cache[t.L]) cache[t.L] = buildMonthlyReport(t.L, 1);
     try { send(t.id, cache[t.L]); } catch (e) {}
   });
+  try { employeeMonthlyReports(); } catch (e) { try { send(prop('ADMIN_ID'), '⚠️ Xodimlar oylik davomati: ' + esc(String(e))); } catch (x) {} }
+}
+/** Har oyning 2-sanasida: ro'yxatdan o'tgan har bir xodimga o'tgan oy davomati — kalendar rasm */
+function employeeMonthlyReports() {
+  var dt = new Date(); dt.setDate(1); dt.setMonth(dt.getMonth() - 1);
+  var midx = dt.getMonth(), sheet = tabelSheetFor(dt.getFullYear(), midx);
+  if (!sheet) return;
+  var rows = tabelRowMap(sheet, midx), names = tabelNameMap(), ok = 0, fail = 0, none = 0;
+  tgRows().forEach(function (r) {
+    if (r[T.STATUS] !== 'active' || !r[T.TG_ID]) return;
+    var pinfl = String(r[T.PINFL]).trim(), L = r[T.LANG] || 'uz', name = names[pinfl] || pinflInBase(pinfl) || '';
+    var row = rows[nameKey(name)];
+    if (!row) { none++; return; }
+    var d = tabelDataFromRow(row, midx, name);
+    if (!d.filled) { none++; return; }
+    try { var res = sendTabelImage(String(r[T.TG_ID]), L, pinfl, midx, d, null); if (res && res.ok) ok++; else fail++; } catch (e) { fail++; }
+  });
+  logAction(prop('ADMIN_ID'), '', 'monthly_employee_reports:' + ok + '/' + fail + '/' + none);
+  send(prop('ADMIN_ID'), '📅 ' + MSG.uz.months[midx] + ' davomati xodimlarga yuborildi: ' + ok + ' ta · yetib bormadi: ' + fail + ' · табельда topilmadi/bo\'sh: ' + none);
 }
 /** Log varag'ini tozalash: LOG_KEEP_DAYS dan eski yoki LOG_MAX_ROWS dan ortiq eng eski qatorlar o'chiriladi */
 function cleanLog() {
@@ -805,17 +834,59 @@ function dailyReport() {
   managerTargets().forEach(function (t) {
     try { sendDaily(t.id, t.L, 0, null); } catch (e) {}
   });
+  try { debtReminders(); } catch (e) { try { send(prop('ADMIN_ID'), '⚠️ Qarz eslatmasi xatosi: ' + esc(String(e))); } catch (x) {} }
+}
+/** Qarz eslatmalari: yopilish sanasidan DEBT_REMIND_DAYS kun oldin va o'sha kuni — xodimga; oyning 1-sanasida — adminga shu oyda yopiladigan qarzlar ro'yxati */
+function debtReminders() {
+  var sh = SpreadsheetApp.getActive().getSheetByName(SHEET_DEBT);
+  if (!sh || sh.getLastRow() < 2) return;
+  var vals = sh.getRange(2, 1, sh.getLastRow() - 1, DB.TOTAL + 1).getValues();
+  var today = new Date(); today.setHours(0, 0, 0, 0);
+  var byPinfl = {}; tgRows().forEach(function (r) { if (r[T.STATUS] === 'active' && r[T.TG_ID]) byPinfl[String(r[T.PINFL]).trim()] = r; });
+  var adminLines = [], sent = 0;
+  vals.forEach(function (r) {
+    var pinfl = String(r[DB.PINFL]).trim(); if (!pinfl || !debtIsOpen(r)) return;
+    var due = parseDate(r[DB.DUE]); if (!due) return; due.setHours(0, 0, 0, 0);
+    var diff = Math.round((due - today) / 86400000), d = debtItem(r);
+    if (today.getDate() === 1 && due.getMonth() === today.getMonth() && due.getFullYear() === today.getFullYear())
+      adminLines.push('• ' + esc(String(r[DB.FIO])) + ' — ' + fmtMoney(d.rest, d.currency) + ' (' + d.due + (d.note ? ', ' + esc(d.note) : '') + ')');
+    if (diff !== DEBT_REMIND_DAYS && diff !== 0) return;
+    var u = byPinfl[pinfl]; if (!u) return;
+    var L = u[T.LANG] || 'uz', M = MSG[L];
+    var txt = (diff === 0 ? M.debt_remind_today : M.debt_remind).replace('{date}', d.due).replace('{amount}', fmtMoney(d.amount, d.currency)).replace('{rest}', fmtMoney(d.rest, d.currency)).replace('{note}', d.note ? ' (' + esc(d.note) + ')' : '');
+    try { var res = send(String(u[T.TG_ID]), txt); if (res && res.ok) sent++; } catch (e) {}
+  });
+  if (adminLines.length) send(prop('ADMIN_ID'), '<b>💳 Shu oyda yopiladigan qarzlar (' + adminLines.length + ')</b>\n' + adminLines.join('\n'));
+  if (sent) logAction(prop('ADMIN_ID'), '', 'debt_reminders:' + sent);
+}
+/** Har kuni ALERT_HOUR da: bugun табельда «прогул» belgilangan, ro'yxatdan o'tgan xodimlarga ogohlantirish */
+function absenceAlerts() {
+  var today = new Date(), midx = today.getMonth(), day = today.getDate();
+  var sheet = tabelSheetFor(today.getFullYear(), midx); if (!sheet) return;
+  var rows = tabelRowMap(sheet, midx), names = tabelNameMap(), col = TAB.DAY0 + (day - 1) * 2;
+  var dateStr = (day < 10 ? '0' : '') + day + '.' + (midx < 9 ? '0' : '') + (midx + 1) + '.' + today.getFullYear();
+  var cache = CacheService.getScriptCache(), sent = 0, list = [];
+  tgRows().forEach(function (r) {
+    if (r[T.STATUS] !== 'active' || !r[T.TG_ID]) return;
+    var pinfl = String(r[T.PINFL]).trim(), name = names[pinfl] || pinflInBase(pinfl) || '', row = rows[nameKey(name)];
+    if (!row || markKind(row[col]) !== 'a') return;
+    var key = 'abs_' + pinfl + '_' + dateStr; if (cache.get(key)) return; // bir kunda bir marta
+    var L = r[T.LANG] || 'uz';
+    try { var res = send(String(r[T.TG_ID]), MSG[L].abs_alert.replace('{date}', dateStr)); if (res && res.ok) { sent++; list.push(name); cache.put(key, '1', 21600); } } catch (e) {}
+  });
+  if (sent) { logAction(prop('ADMIN_ID'), '', 'absence_alerts:' + sent); send(prop('ADMIN_ID'), '⚠️ Bugungi прогул ogohlantirishi yuborildi (' + sent + '): ' + list.map(esc).join(', ')); }
 }
 function installTriggers() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
     var f = t.getHandlerFunction();
-    if (f === 'dailyReport' || f === 'monthlyReport' || f === 'warmApiCache') ScriptApp.deleteTrigger(t);
+    if (f === 'dailyReport' || f === 'monthlyReport' || f === 'warmApiCache' || f === 'absenceAlerts') ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('dailyReport').timeBased().atHour(REPORT_HOUR).everyDays(1).create();
+  ScriptApp.newTrigger('absenceAlerts').timeBased().atHour(ALERT_HOUR).everyDays(1).create();
   ScriptApp.newTrigger('monthlyReport').timeBased().onMonthDay(2).atHour(REPORT_HOUR).create();
   ScriptApp.newTrigger('warmApiCache').timeBased().everyMinutes(WARM_MINUTES).create();
   warmApiCache();
-  Logger.log('Triggerlar o\'rnatildi: har kuni va har oyning 2-sanasida, soat ' + REPORT_HOUR + '; API keshi har ' + WARM_MINUTES + ' daqiqada');
+  Logger.log('Triggerlar o\'rnatildi: har kuni ' + REPORT_HOUR + ':00 (hisobot, qarz eslatmasi), ' + ALERT_HOUR + ':00 (прогул), oyning 2-sanasida (oylik); API keshi har ' + WARM_MINUTES + ' daqiqada');
 }
 /** Mini App uchun eng ko'p so'raladigan ma'lumotlarni oldindan hisoblab keshga yozadi — dashboard darhol ochiladi */
 function warmApiCache() {
@@ -980,7 +1051,7 @@ function showTabel(chat, rec, midx) {
   var L = rec.v[T.LANG] || 'uz';
   var pinfl = String(rec.v[T.PINFL]).trim();
   logAction(rec.v[T.TG_ID], pinfl, 'tabel:' + RU_MONTHS[midx]);
-  return send(chat, tabelReport(pinfl, Number(midx), L), mainMenu(L));
+  return sendTabelImage(chat, L, pinfl, Number(midx), null, mainMenu(L));
 }
 function tabelReport(pinfl, midx, L) {
   try {
@@ -1224,17 +1295,40 @@ function tabelData(pinfl, midx) {
   if (!sheet) return out;
   var r = findTabelRow(sheet, name);
   if (!r) return out;
-  out.found = true;
+  return tabelDataFromRow(r, midx, name);
+}
+/** Табель qatoridan oylik ma'lumot (bir marta o'qilgan varaq uchun — ko'p xodimga tez) */
+function tabelDataFromRow(r, midx, name) {
+  var out = { midx: midx, name: name, found: true, days: [], w: 0, h: 0, a: 0, v: 0, s: 0, b: 0, extra: 0, totalDays: null, filled: false };
   var tc = tabCols(midx);
   for (var d = 0; d < tc.nd; d++) {
     var mark = r[TAB.DAY0 + d * 2], hrs = r[TAB.DAY0 + d * 2 + 1], k = markKind(mark);
     out.days.push({ d: d + 1, k: k, raw: mark === '' ? '' : String(mark), hrs: typeof hrs === 'number' ? hrs : 0 });
+    if (k !== 'u') out.filled = true;
     if (k === 'w') out.w++; else if (k === 'h') out.h++; else if (k === 'a') out.a++; else if (k === 'v') out.v++; else if (k === 's') out.s++; else if (k === 'b') out.b++;
     if (typeof hrs === 'number') out.extra += hrs;
   }
   if (typeof r[tc.DAYS] === 'number') out.totalDays = r[tc.DAYS];
   if (typeof r[tc.EXTRA] === 'number') out.extra = r[tc.EXTRA];
   return out;
+}
+/** ПИНФЛ → Табельдаги ism (barcha xodimlar, bir o'qishda) */
+function tabelNameMap() {
+  var map = {}, sh = SpreadsheetApp.getActive().getSheetByName(SHEET_NAMES);
+  if (sh && sh.getLastRow() > 1) {
+    sh.getRange(2, 1, sh.getLastRow() - 1, 4).getValues().forEach(function (v) {
+      var p = String(v[0]).trim(); if (!p) return;
+      var stt = String(v[3] || '').toLowerCase();
+      map[p] = (v[2] && stt.indexOf('провер') < 0) ? String(v[2]) : String(v[1] || '');
+    });
+  }
+  return map;
+}
+/** Табель varag'ini bir marta o'qib, nameKey → qator xaritasi */
+function tabelRowMap(sheet, midx) {
+  var map = {};
+  tabelRows(sheet, midx).forEach(function (e) { var k = nameKey(e.fio); if (!map[k]) map[k] = e.row; });
+  return map;
 }
 
 // =====================================================================
@@ -1280,6 +1374,69 @@ function debtReport(pinfl, L) {
   if (open.length) lines.push('<b>' + M.debt_total_rest + ': ' + tot.join(' + ') + '</b>');
   if (closed.length) lines.push('', '<i>' + M.debt_closed + ': ' + closed.map(function (x) { return fmtMoney(x.amount, x.currency) + (x.note ? ' (' + esc(x.note) + ')' : '') + ' — ' + esc(x.due); }).join('; ') + '</i>');
   return lines.join('\n');
+}
+
+// =====================================================================
+// Xodim oylik davomati — kalendar rasm (PNG, QuickChart). Chizilmasa — matnli hisobot.
+// =====================================================================
+var CAL_COLORS = { w: '#2E7D32', h: '#66BB6A', a: '#C62828', v: '#1565C0', s: '#F9A825', b: '#6A1B9A', u: '#E0E0E0' };
+function tabelCalendarConfig(d, L, year) {
+  var M = MSG[L], midx = d.midx, nd = d.days.length, mon0 = (new Date(year, midx, 1).getDay() + 6) % 7; // dushanba=0
+  var weeks = Math.ceil((mon0 + nd) / 7), wk = []; for (var i = 0; i < weeks; i++) wk.push((i + 1) + M.cal_week);
+  var NAMES = { w: M.cal_worked, h: M.cal_half, a: M.cal_abs, v: M.cal_vac, s: M.cal_sick, b: M.cal_bs, u: M.cal_un }, by = {};
+  d.days.forEach(function (x) {
+    var idx = mon0 + x.d - 1, k = x.k === 'x' ? 'u' : x.k;
+    (by[k] = by[k] || []).push({ x: M.cal_wd[idx % 7], y: wk[Math.floor(idx / 7)], label: String(x.d) + (x.hrs ? '\n+' + x.hrs : '') });
+  });
+  var order = ['w', 'h', 'a', 'v', 's', 'b', 'u'].filter(function (k) { return by[k]; });
+  var worked = (d.totalDays !== null ? d.totalDays : d.w + d.h * 0.5);
+  var sub = d.name + ' · ' + M.cal_worked + ' ' + fmtNum(worked, worked % 1 ? 1 : 0) + ' ' + M.t_days + ' · ' + M.cal_abs + ' ' + d.a + ' · ' + M.cal_vac + ' ' + d.v + ' · ' + M.cal_sick + ' ' + d.s + (d.extra ? ' · ' + M.cal_extra + ' ' + fmtNum(d.extra, 0) : '');
+  return {
+    width: 560, height: 130 + weeks * 58 + 60,
+    chart: {
+      type: 'scatter',
+      data: { datasets: order.map(function (k) { return { label: NAMES[k], data: by[k], backgroundColor: CAL_COLORS[k], pointStyle: 'rect', pointRadius: 26, pointHoverRadius: 26, borderColor: '#ffffff', borderWidth: 2, datalabels: k === 'u' ? { color: '#888888' } : {} }; }) },
+      options: {
+        animation: false, responsive: false, layout: { padding: { left: 6, right: 6, bottom: 4 } },
+        plugins: {
+          title: { display: true, text: M.tabel_title.replace(/^📅\s*/, '') + ' — ' + M.months[midx] + ' ' + year, font: { size: 22, weight: '600' }, color: '#111111' },
+          subtitle: { display: true, text: sub, font: { size: 13 }, color: '#555555', padding: { bottom: 12 } },
+          legend: { position: 'bottom', labels: { usePointStyle: true, pointStyle: 'rect', boxWidth: 10, font: { size: 12 }, color: '#333333' } },
+          datalabels: { color: '#ffffff', font: { size: 13, weight: '600' }, align: 'center', anchor: 'center', textAlign: 'center' }
+        },
+        scales: {
+          x: { type: 'category', labels: M.cal_wd, offset: true, position: 'top', grid: { display: false }, ticks: { color: '#555555', font: { size: 13, weight: '600' } }, border: { display: false } },
+          y: { type: 'category', labels: wk, offset: true, grid: { display: false }, ticks: { color: '#777777', font: { size: 12 } }, border: { display: false } }
+        }
+      }
+    }
+  };
+}
+function chartPng(cfg, name) {
+  var body = JSON.stringify({ version: '4', width: cfg.width, height: cfg.height, backgroundColor: '#ffffff', devicePixelRatio: 2, format: 'png', chart: cfg.chart });
+  var res = UrlFetchApp.fetch('https://quickchart.io/chart', { method: 'post', contentType: 'application/json', payload: body, muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) throw new Error('QuickChart HTTP ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 300));
+  var blob = res.getBlob();
+  if (String(blob.getContentType()).indexOf('image') < 0) throw new Error('QuickChart rasm qaytarmadi: ' + res.getContentText().slice(0, 200));
+  return blob.setName(name);
+}
+/** Xodimning oylik davomatini kalendar rasm bilan yuboradi; d berilmasa tabelData o'qiladi; chizilmasa — matn */
+function sendTabelImage(chat, L, pinfl, midx, d, kb) {
+  var M = MSG[L];
+  try {
+    if (!d) d = tabelData(pinfl, midx);
+    if (d && d.found && d.days.some(function (x) { return x.k !== 'u'; })) {
+      var blob = chartPng(tabelCalendarConfig(d, L, TABEL_YEAR), 'tabel.png');
+      var absent = d.days.filter(function (x) { return x.k === 'a'; }).map(function (x) { return (x.d < 10 ? '0' : '') + x.d + '.' + (midx < 9 ? '0' : '') + (midx + 1); });
+      var cap = M.cal_caption.replace('{month}', M.months[midx]) + (absent.length ? '\n' + M.t_absent_days + ': ' + absent.join(', ') : '');
+      var p = { chat_id: String(chat), photo: blob, caption: cap, parse_mode: 'HTML' };
+      if (kb) p.reply_markup = JSON.stringify(kb);
+      var r = tg('sendPhoto', p, true);
+      if (r && r.ok) return r;
+      chartFail('sendPhoto(tabel): ' + JSON.stringify(r).slice(0, 300));
+    }
+  } catch (e) { chartFail('tabel: ' + String(e)); }
+  return send(chat, tabelReport(pinfl, midx, L), kb);
 }
 
 // =====================================================================
