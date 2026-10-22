@@ -49,7 +49,7 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-10-22.3';
+var BOT_VERSION = '2026-10-23.1';
 var COMPANY = '«Artel electronics manufacturing» MCHJ'; // hisob varaqasi sarlavhasi
 var API_CACHE_SEC = 900; // Mini App ma'lumotlari keshi (soniya); warmApiCache() har 5 daqiqada yangilab turadi
 var WARM_MINUTES = 5;
@@ -1395,9 +1395,12 @@ function debtReport(pinfl, L) {
 var PS = { PLAN: 6, FACT: 7, OKLAD: 8, ACC_BANK: 11, ADV_CARD: 12, INSTALL: 13, FINE: 14, DED_TOTAL: 15, BONUS: 16, VAC: 17, SICK: 18, COMP: 19, ACC_CASH: 22, ADV_CASH: 23, FLAT: 24, TOTAL: 26 };
 function payslipData(r, L) {
   var M = MSG[L], n = function (i) { return numVal(r[i]); };
+  // ЗП итог (AA) ichida: jarima AYRILGAN, ta'til/kasallik/kompensatsiya QO'SHILGAN; avans, rassrochka, kvartira ayrilmagan.
+  // Shuning uchun jarima faqat ma'lumot uchun ko'rsatiladi (ikkinchi marta ayrilmaydi), qolgan ushlanmalar ayriladi.
   var inc = [[M.ps_oklad, n(PS.OKLAD)], [M.ps_acc_bank, n(PS.ACC_BANK)], [M.ps_acc_cash, n(PS.ACC_CASH)], [M.ps_bonus, n(PS.BONUS)], [M.ps_vac, n(PS.VAC)], [M.ps_sick, n(PS.SICK)], [M.ps_comp, n(PS.COMP)]];
-  var ded = [[M.ps_adv_card, n(PS.ADV_CARD)], [M.ps_install, n(PS.INSTALL)], [M.ps_fine, n(PS.FINE)], [M.ps_adv_cash, n(PS.ADV_CASH)], [M.ps_flat, n(PS.FLAT)]];
-  var total = n(PS.TOTAL), dedTotal = n(PS.DED_TOTAL) + n(PS.ADV_CASH) + n(PS.FLAT);
+  if (n(PS.FINE)) inc.push([M.ps_fine, -n(PS.FINE)]);
+  var ded = [[M.ps_adv_card, n(PS.ADV_CARD)], [M.ps_install, n(PS.INSTALL)], [M.ps_adv_cash, n(PS.ADV_CASH)], [M.ps_flat, n(PS.FLAT)]];
+  var total = n(PS.TOTAL), dedTotal = n(PS.ADV_CARD) + n(PS.INSTALL) + n(PS.ADV_CASH) + n(PS.FLAT);
   var pinfl = String(r[COL.PINFL]).trim(), dd = debtData(pinfl), rest = Object.keys(dd.total_rest).map(function (c) { return fmtMoney(dd.total_rest[c], c); }).join(' + ');
   return { period: String(r[COL.PERIOD]), fio: String(r[COL.FIO]), position: String(r[4] || ''), plan: n(PS.PLAN), fact: n(PS.FACT),
     inc: inc.filter(function (x) { return x[1]; }), ded: ded.filter(function (x) { return x[1]; }), total: total, dedTotal: dedTotal, net: total - dedTotal, debtRest: rest };
@@ -1428,7 +1431,7 @@ function payslipImage(d, L) {
     text(d.period + '  ·  ' + d.fio + (d.position ? '  ·  ' + d.position : ''), 28, 48, W - 56, 24, 13, '#FFFFFF', false, false);
     y = 100;
     section(M.ps_time); line(M.ps_plan, fmtNum(d.plan, 0)); line(M.ps_fact, fmtNum(d.fact, 0));
-    section(M.ps_inc); d.inc.forEach(function (x) { line(x[0], fmtNum(x[1], 0) + ' ' + M.sum); }); line(M.ps_inc_total, fmtNum(d.total, 0) + ' ' + M.sum, { bold: true });
+    section(M.ps_inc); d.inc.forEach(function (x) { line(x[0], (x[1] < 0 ? '− ' : '') + fmtNum(Math.abs(x[1]), 0) + ' ' + M.sum, x[1] < 0 ? { color: '#C62828' } : {}); }); line(M.ps_inc_total, fmtNum(d.total, 0) + ' ' + M.sum, { bold: true });
     if (d.ded.length) { section(M.ps_ded); d.ded.forEach(function (x) { line(x[0], '− ' + fmtNum(x[1], 0) + ' ' + M.sum, { color: '#C62828' }); }); line(M.ps_ded_total, '− ' + fmtNum(d.dedTotal, 0) + ' ' + M.sum, { color: '#C62828', bold: true }); }
     y += 6; rect(28, y, W - 56, 44, '#E8F5E9');
     text(M.ps_net, 40, y, 300, 44, 18, '#1B5E20', true, false); text(fmtNum(d.net, 0) + ' ' + M.sum, 360, y, 320, 44, 18, '#1B5E20', true, true); y += 54;
