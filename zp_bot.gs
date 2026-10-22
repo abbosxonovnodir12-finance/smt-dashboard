@@ -49,7 +49,7 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-10-22.2';
+var BOT_VERSION = '2026-10-22.3';
 var COMPANY = '«Artel electronics manufacturing» MCHJ'; // hisob varaqasi sarlavhasi
 var API_CACHE_SEC = 900; // Mini App ma'lumotlari keshi (soniya); warmApiCache() har 5 daqiqada yangilab turadi
 var WARM_MINUTES = 5;
@@ -413,6 +413,7 @@ function handleMessage(m) {
     if (text.indexOf('/broadcast') === 0) return adminBroadcast(uid, chat, text.replace('/broadcast', '').trim());
     if (text === '/admin') return send(chat, ADMIN_HELP);
     if (text === '/payslip') { // hisob varaqasi diagnostikasi (adminning o'z oxirgi oyi)
+      if (typeof Slides === 'undefined') return send(chat, '⚠️ Slides API xizmati yoqilmagan.\nApps Script → chap paneldagi <b>Services</b> yonidagi «+» → <b>Google Slides API</b> → Add. Keyin saqlab, /payslip ni qayta yozing.');
       try { var pr = rowsForPinfl(rec ? String(rec.v[T.PINFL]).trim() : ''); if (!pr.length) return send(chat, 'Sizning ПИНФЛ bo\'yicha база da qator yo\'q — avval ro\'yxatdan o\'ting.'); var bl2 = payslipImage(payslipData(pr[pr.length - 1], 'uz'), 'uz'); var r2 = tg('sendPhoto', { chat_id: String(chat), photo: bl2, caption: 'test' }, true); return send(chat, r2 && r2.ok ? '✅ Hisob varaqasi ishlaydi' : '⚠️ sendPhoto: ' + esc(JSON.stringify(r2).slice(0, 500))); }
       catch (e) { return send(chat, '⚠️ Hisob varaqasi xatosi: ' + esc(String(e))); }
     }
