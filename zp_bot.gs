@@ -49,7 +49,8 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-10-22.1';
+var BOT_VERSION = '2026-10-22.2';
+var COMPANY = '«Artel electronics manufacturing» MCHJ'; // hisob varaqasi sarlavhasi
 var API_CACHE_SEC = 900; // Mini App ma'lumotlari keshi (soniya); warmApiCache() har 5 daqiqada yangilab turadi
 var WARM_MINUTES = 5;
 var REPORT_HOUR = 10;
@@ -75,6 +76,9 @@ var MSG = {
     rejected: "❌ Admin so'rovingizni rad etdi. Savollar bo'lsa HR ga murojaat qiling.",
     unlinked: "Sizning bog'lanishingiz admin tomonidan bekor qilindi. Qayta ro'yxatdan o'tish uchun /start bosing.",
     menu: "Kerakli bo'limni tanlang:",
+    ps_title: "Oylik hisob varaqasi", ps_time: "Ish vaqti", ps_plan: "Reja kunlari", ps_fact: "Ishlangan kunlar", ps_inc: "Hisoblanganlar", ps_ded: "Ushlanmalar", ps_inc_total: "Jami hisoblangan", ps_ded_total: "Jami ushlanma", ps_net: "QO'LGA TEGADI",
+    ps_oklad: "Oklad", ps_acc_bank: "Hisoblangan (bux)", ps_acc_cash: "Hisoblangan (naqd)", ps_bonus: "Mukofot (plastik)", ps_vac: "Ta'til", ps_sick: "Kasallik varaqasi", ps_comp: "Kompensatsiya",
+    ps_adv_card: "Avans (plastik)", ps_install: "Rassrochka (qarz)", ps_fine: "Jarima", ps_adv_cash: "Avans (naqd)", ps_flat: "Kvartira", ps_debt_rest: "Qarz qoldig'i", ps_foot: "Hisob varaqasi avtomatik tuzilgan. Savollar bo'lsa — ✉️ Adminga ariza",
     cal_wd: ["Du","Se","Ch","Pa","Ju","Sh","Ya"], cal_week: "-hafta", cal_worked: "Ishlangan", cal_half: "Yarim kun", cal_abs: "Прогул", cal_vac: "Ta'til", cal_sick: "Kasallik", cal_bs: "Бс", cal_un: "Belgilanmagan", cal_extra: "Qo'sh. soat",
     cal_caption: "Sizning {month} oyi davomatingiz. Savollar bo'lsa — HR yoki ✉️ Adminga ariza.",
     abs_alert: "⚠️ Bugun ({date}) табельда sizga «прогул» belgilandi.\nAgar bu xato deb hisoblasangiz, HR ga murojaat qiling yoki ✉️ Adminga ariza yuboring.",
@@ -125,6 +129,9 @@ var MSG = {
     rejected: "❌ Админ отклонил ваш запрос. По вопросам обращайтесь в HR.",
     unlinked: "Ваша привязка отменена админом. Для повторной регистрации нажмите /start.",
     menu: "Выберите раздел:",
+    ps_title: "Расчётный лист", ps_time: "Рабочее время", ps_plan: "План дней", ps_fact: "Отработано дней", ps_inc: "Начисления", ps_ded: "Удержания", ps_inc_total: "Итого начислено", ps_ded_total: "Итого удержано", ps_net: "К ВЫДАЧЕ",
+    ps_oklad: "Оклад", ps_acc_bank: "Начисление (бух)", ps_acc_cash: "Начисление (наличка)", ps_bonus: "Премия (пластик)", ps_vac: "Отпуск", ps_sick: "Больничный", ps_comp: "Компенсация",
+    ps_adv_card: "Аванс (пластик)", ps_install: "Рассрочка (долг)", ps_fine: "Штрафы", ps_adv_cash: "Аванс (наличка)", ps_flat: "Квартира", ps_debt_rest: "Остаток долга", ps_foot: "Расчётный лист сформирован автоматически. Вопросы — ✉️ Заявка админу",
     cal_wd: ["Пн","Вт","Ср","Чт","Пт","Сб","Вс"], cal_week: "-я нед.", cal_worked: "Отработано", cal_half: "Полдня", cal_abs: "Прогул", cal_vac: "Отпуск", cal_sick: "Больничный", cal_bs: "Бс", cal_un: "Не отмечено", cal_extra: "Доп. часы",
     cal_caption: "Ваш табель за {month}. Вопросы — HR или ✉️ Заявка админу.",
     abs_alert: "⚠️ Сегодня ({date}) в табеле вам отмечен «прогул».\nЕсли считаете это ошибкой — обратитесь в HR или отправьте ✉️ заявку админу.",
@@ -405,6 +412,10 @@ function handleMessage(m) {
     if (text === '/pending') return adminPending(chat);
     if (text.indexOf('/broadcast') === 0) return adminBroadcast(uid, chat, text.replace('/broadcast', '').trim());
     if (text === '/admin') return send(chat, ADMIN_HELP);
+    if (text === '/payslip') { // hisob varaqasi diagnostikasi (adminning o'z oxirgi oyi)
+      try { var pr = rowsForPinfl(rec ? String(rec.v[T.PINFL]).trim() : ''); if (!pr.length) return send(chat, 'Sizning ПИНФЛ bo\'yicha база da qator yo\'q — avval ro\'yxatdan o\'ting.'); var bl2 = payslipImage(payslipData(pr[pr.length - 1], 'uz'), 'uz'); var r2 = tg('sendPhoto', { chat_id: String(chat), photo: bl2, caption: 'test' }, true); return send(chat, r2 && r2.ok ? '✅ Hisob varaqasi ishlaydi' : '⚠️ sendPhoto: ' + esc(JSON.stringify(r2).slice(0, 500))); }
+      catch (e) { return send(chat, '⚠️ Hisob varaqasi xatosi: ' + esc(String(e))); }
+    }
     if (text === '/chart') { // diagramma diagnostikasi: xatoni to'liq ko'rsatadi
       try { var dtest = dailyData(0); if (!dtest.filled) return send(chat, 'Bugungi табель to\'ldirilmagan — diagramma uchun ma\'lumot yo\'q.'); var bl = dailyChartBlob(dtest, 'uz'); var rr = tg('sendPhoto', { chat_id: String(chat), photo: bl, caption: 'test' }, true); return send(chat, rr && rr.ok ? '✅ Diagramma ishlaydi' : '⚠️ sendPhoto: ' + esc(JSON.stringify(rr).slice(0, 500))); }
       catch (e) { return send(chat, '⚠️ Diagramma xatosi: ' + esc(String(e))); }
@@ -573,7 +584,7 @@ function handleCallback(q) {
     if (parts[0] === 'ms') { logAction(uid, parts[1], 'mgr_pick'); return send(chat, MSG[Lq].choose_month, monthsKb(parts[1], 'mm:' + parts[1]) || { inline_keyboard: [] }); }
     if (parts[0] === 'mt') return send(chat, MSG[Lq].choose_month, tabelMonthsKb(Lq, 'mtab:' + parts[1]));
     if (parts[0] === 'mtab') { logAction(uid, parts[1], 'mgr_tabel'); return send(chat, tabelReport(parts[1], Number(parts[2]), Lq), mainMenu(Lq)); }
-    if (parts[0] === 'mm') { logAction(uid, parts[1], 'mgr_view'); return send(chat, reportFor(parts[1], Number(parts[2]), Lq) || MSG[Lq].no_data, mainMenu(Lq)); }
+    if (parts[0] === 'mm') { logAction(uid, parts[1], 'mgr_view'); var rr = rowsForPinfl(parts[1]).slice(-12).reverse()[Number(parts[2])]; return rr ? sendPayslip(chat, Lq, rr, mainMenu(Lq)) : send(chat, MSG[Lq].no_data, mainMenu(Lq)); }
   }
 
   if (parts[0] === 'lang') {
@@ -668,10 +679,10 @@ function showMonths(chat, rec, L) {
 function showReport(chat, rec, idx) {
   var L = rec.v[T.LANG] || 'uz';
   var pinfl = String(rec.v[T.PINFL]).trim();
-  var txt = reportFor(pinfl, Number(idx), L);
-  if (!txt) return send(chat, MSG[L].no_data);
+  var r = rowsForPinfl(pinfl).slice(-12).reverse()[Number(idx)];
+  if (!r) return send(chat, MSG[L].no_data);
   logAction(rec.v[T.TG_ID], pinfl, 'view:' + idx);
-  return send(chat, txt, mainMenu(L));
+  return sendPayslip(chat, L, r, mainMenu(L));
 }
 
 // ---------- Rahbar: xodim qidirish ----------
@@ -1377,6 +1388,73 @@ function debtReport(pinfl, L) {
 }
 
 // =====================================================================
+// Oylik hisob varaqasi — karta ko'rinishida rasm (Google Slides → PNG). Slides API (Advanced service) yoqilgan bo'lishi kerak;
+// bo'lmasa yoki xato bo'lsa — matnli hisobot yuboriladi.
+// =====================================================================
+var PS = { PLAN: 6, FACT: 7, OKLAD: 8, ACC_BANK: 11, ADV_CARD: 12, INSTALL: 13, FINE: 14, DED_TOTAL: 15, BONUS: 16, VAC: 17, SICK: 18, COMP: 19, ACC_CASH: 22, ADV_CASH: 23, FLAT: 24, TOTAL: 26 };
+function payslipData(r, L) {
+  var M = MSG[L], n = function (i) { return numVal(r[i]); };
+  var inc = [[M.ps_oklad, n(PS.OKLAD)], [M.ps_acc_bank, n(PS.ACC_BANK)], [M.ps_acc_cash, n(PS.ACC_CASH)], [M.ps_bonus, n(PS.BONUS)], [M.ps_vac, n(PS.VAC)], [M.ps_sick, n(PS.SICK)], [M.ps_comp, n(PS.COMP)]];
+  var ded = [[M.ps_adv_card, n(PS.ADV_CARD)], [M.ps_install, n(PS.INSTALL)], [M.ps_fine, n(PS.FINE)], [M.ps_adv_cash, n(PS.ADV_CASH)], [M.ps_flat, n(PS.FLAT)]];
+  var total = n(PS.TOTAL), dedTotal = n(PS.DED_TOTAL) + n(PS.ADV_CASH) + n(PS.FLAT);
+  var pinfl = String(r[COL.PINFL]).trim(), dd = debtData(pinfl), rest = Object.keys(dd.total_rest).map(function (c) { return fmtMoney(dd.total_rest[c], c); }).join(' + ');
+  return { period: String(r[COL.PERIOD]), fio: String(r[COL.FIO]), position: String(r[4] || ''), plan: n(PS.PLAN), fact: n(PS.FACT),
+    inc: inc.filter(function (x) { return x[1]; }), ded: ded.filter(function (x) { return x[1]; }), total: total, dedTotal: dedTotal, net: total - dedTotal, debtRest: rest };
+}
+function payslipPresentation() { // bitta doimiy taqdimot (ID Script property'da), har safar yangi slayd chiziladi va o'chiriladi
+  var p = PropertiesService.getScriptProperties(), id = p.getProperty('PAYSLIP_PRES_ID');
+  if (id) { try { return SlidesApp.openById(id); } catch (e) {} }
+  var created = Slides.Presentations.create({ title: 'ЗП bot — hisob varaqasi (avtomatik)', pageSize: { width: { magnitude: 720, unit: 'PT' }, height: { magnitude: 700, unit: 'PT' } } });
+  p.setProperty('PAYSLIP_PRES_ID', created.presentationId);
+  return SlidesApp.openById(created.presentationId);
+}
+function payslipImage(d, L) {
+  var M = MSG[L], lock = LockService.getScriptLock(); lock.waitLock(30000);
+  try {
+    var pres = payslipPresentation(), slide = pres.appendSlide(SlidesApp.PredefinedLayout.BLANK);
+    var W = 720, y = 0;
+    var rect = function (l, t, w, h, color) { var sh = slide.insertShape(SlidesApp.ShapeType.RECTANGLE, l, t, w, h); sh.getFill().setSolidFill(color); sh.getBorder().setTransparent(); return sh; };
+    var text = function (str, l, t, w, h, size, color, bold, right) {
+      var tb = slide.insertTextBox(str, l, t, w, h), tr = tb.getText(), st = tr.getTextStyle();
+      st.setFontFamily('Arial').setFontSize(size).setForegroundColor(color).setBold(!!bold);
+      tr.getParagraphStyle().setParagraphAlignment(right ? SlidesApp.ParagraphAlignment.END : SlidesApp.ParagraphAlignment.START).setSpaceAbove(0).setSpaceBelow(0);
+      tb.setContentAlignment(SlidesApp.ContentAlignment.MIDDLE); return tb;
+    };
+    var line = function (l, v, opt) { opt = opt || {}; text(l, 40, y, 420, 24, opt.size || 13, opt.color || '#222222', opt.bold, false); text(v, 360, y, 320, 24, opt.size || 13, opt.color || '#222222', opt.bold, true); y += opt.gap || 24; };
+    var section = function (t) { rect(28, y, W - 56, 24, '#F2F4F7'); text(t.toUpperCase(), 40, y, 400, 24, 10, '#555555', true, false); y += 28; };
+    rect(0, 0, W, 86, '#1565C0');
+    text(COMPANY + ' — ' + M.ps_title, 28, 12, W - 56, 32, 20, '#FFFFFF', true, false);
+    text(d.period + '  ·  ' + d.fio + (d.position ? '  ·  ' + d.position : ''), 28, 48, W - 56, 24, 13, '#FFFFFF', false, false);
+    y = 100;
+    section(M.ps_time); line(M.ps_plan, fmtNum(d.plan, 0)); line(M.ps_fact, fmtNum(d.fact, 0));
+    section(M.ps_inc); d.inc.forEach(function (x) { line(x[0], fmtNum(x[1], 0) + ' ' + M.sum); }); line(M.ps_inc_total, fmtNum(d.total, 0) + ' ' + M.sum, { bold: true });
+    if (d.ded.length) { section(M.ps_ded); d.ded.forEach(function (x) { line(x[0], '− ' + fmtNum(x[1], 0) + ' ' + M.sum, { color: '#C62828' }); }); line(M.ps_ded_total, '− ' + fmtNum(d.dedTotal, 0) + ' ' + M.sum, { color: '#C62828', bold: true }); }
+    y += 6; rect(28, y, W - 56, 44, '#E8F5E9');
+    text(M.ps_net, 40, y, 300, 44, 18, '#1B5E20', true, false); text(fmtNum(d.net, 0) + ' ' + M.sum, 360, y, 320, 44, 18, '#1B5E20', true, true); y += 54;
+    text((d.debtRest ? M.ps_debt_rest + ': ' + d.debtRest + '  ·  ' : '') + M.ps_foot, 40, y, W - 80, 22, 10, '#888888', false, false);
+    pres.saveAndClose();
+    var th = Slides.Presentations.Pages.getThumbnail(pres.getId(), slide.getObjectId(), { 'thumbnailProperties.mimeType': 'PNG', 'thumbnailProperties.thumbnailSize': 'LARGE' });
+    var blob = UrlFetchApp.fetch(th.contentUrl).getBlob().setName('hisob_varaqasi.png');
+    try { SlidesApp.openById(pres.getId()).getSlideById(slide.getObjectId()).remove(); } catch (e) {}
+    return blob;
+  } finally { lock.releaseLock(); }
+}
+/** Hisob varaqasini rasm bilan yuboradi (caption — matnli hisobot); Slides ishlamasa — faqat matn */
+function sendPayslip(chat, L, r, kb) {
+  var txt = buildReport(r, L);
+  try {
+    if (typeof Slides === 'undefined') throw new Error('Slides API xizmati yoqilmagan (Apps Script → Services → Slides API)');
+    var blob = payslipImage(payslipData(r, L), L);
+    var p = { chat_id: String(chat), photo: blob, caption: txt.length > 1000 ? txt.slice(0, 990) + '…' : txt, parse_mode: 'HTML' };
+    if (kb) p.reply_markup = JSON.stringify(kb);
+    var res = tg('sendPhoto', p, true);
+    if (res && res.ok) return res;
+    chartFail('sendPhoto(payslip): ' + JSON.stringify(res).slice(0, 300));
+  } catch (e) { chartFail('payslip: ' + String(e)); }
+  return send(chat, txt, kb);
+}
+
+// =====================================================================
 // Xodim oylik davomati — kalendar rasm (PNG, QuickChart). Chizilmasa — matnli hisobot.
 // =====================================================================
 var CAL_COLORS = { w: '#2E7D32', h: '#66BB6A', a: '#C62828', v: '#1565C0', s: '#F9A825', b: '#6A1B9A', u: '#E0E0E0' };
@@ -1688,7 +1766,7 @@ function aiTool(name, a) {
 }
 function aiSystemPrompt(L, name) {
   var t = new Date();
-  return "Siz «SMT» zavodi rahbariyati uchun Telegram yordamchisiz. Foydalanuvchi: " + name + " (rahbar). Bugun: " + Utilities.formatDate(t, Session.getScriptTimeZone(), 'dd.MM.yyyy') + " (joriy oy raqami: " + (t.getMonth() + 1) + ").\n" +
+  return "Siz " + COMPANY + " (SMT zavodi) rahbariyati uchun Telegram yordamchisiz. Foydalanuvchi: " + name + " (rahbar). Bugun: " + Utilities.formatDate(t, Session.getScriptTimeZone(), 'dd.MM.yyyy') + " (joriy oy raqami: " + (t.getMonth() + 1) + ").\n" +
     "QOIDALAR:\n1. Barcha raqam va faktlarni FAQAT asboblar (tools) natijasidan oling. Hech narsani taxmin qilmang, hisoblab chiqarmang (yig'indi kerak bo'lsa ham asbob bergan raqamlardan foydalaning).\n" +
     "2. Xodim haqidagi har qanday savolda avval find_employee chaqiring. Bitta natija bo'lsa — davom eting. Bir nechta bo'lsa — javobni ro'yxat bilan yakunlab, qaysi biri ekanligini so'rang. Topilmasa — shuni ayting.\n" +
     "3. Javob tili: " + (L === 'ru' ? "rus tilida" : "o'zbek tilida (lotin)") + ", agar savol boshqa tilda bo'lsa — savol tilida. Qisqa, aniq, oddiy matn (Markdown, *, # ishlatmang). Kerak bo'lsa qatorlarga ajrating.\n" +
