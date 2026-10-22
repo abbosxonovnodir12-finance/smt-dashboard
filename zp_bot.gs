@@ -49,7 +49,7 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-10-23.1';
+var BOT_VERSION = '2026-10-23.2';
 var COMPANY = '«Artel electronics manufacturing» MCHJ'; // hisob varaqasi sarlavhasi
 var API_CACHE_SEC = 900; // Mini App ma'lumotlari keshi (soniya); warmApiCache() har 5 daqiqada yangilab turadi
 var WARM_MINUTES = 5;
@@ -78,7 +78,7 @@ var MSG = {
     menu: "Kerakli bo'limni tanlang:",
     ps_title: "Oylik hisob varaqasi", ps_time: "Ish vaqti", ps_plan: "Reja kunlari", ps_fact: "Ishlangan kunlar", ps_inc: "Hisoblanganlar", ps_ded: "Ushlanmalar", ps_inc_total: "Jami hisoblangan", ps_ded_total: "Jami ushlanma", ps_net: "QO'LGA TEGADI",
     ps_oklad: "Oklad", ps_acc_bank: "Hisoblangan (bux)", ps_acc_cash: "Hisoblangan (naqd)", ps_bonus: "Mukofot (plastik)", ps_vac: "Ta'til", ps_sick: "Kasallik varaqasi", ps_comp: "Kompensatsiya",
-    ps_adv_card: "Avans (plastik)", ps_install: "Rassrochka (qarz)", ps_fine: "Jarima", ps_adv_cash: "Avans (naqd)", ps_flat: "Kvartira", ps_debt_rest: "Qarz qoldig'i", ps_foot: "Hisob varaqasi avtomatik tuzilgan. Savollar bo'lsa — ✉️ Adminga ariza",
+    ps_adv_card: "Avans (plastik)", ps_install: "Rassrochka (qarz)", ps_fine: "Jarima", ps_adv_cash: "Avans (naqd)", ps_flat: "Kvartira puli", ps_debt_rest: "Qarz qoldig'i", ps_foot: "Hisob varaqasi avtomatik tuzilgan. Savollar bo'lsa — ✉️ Adminga ariza",
     cal_wd: ["Du","Se","Ch","Pa","Ju","Sh","Ya"], cal_week: "-hafta", cal_worked: "Ishlangan", cal_half: "Yarim kun", cal_abs: "Прогул", cal_vac: "Ta'til", cal_sick: "Kasallik", cal_bs: "Бс", cal_un: "Belgilanmagan", cal_extra: "Qo'sh. soat",
     cal_caption: "Sizning {month} oyi davomatingiz. Savollar bo'lsa — HR yoki ✉️ Adminga ariza.",
     abs_alert: "⚠️ Bugun ({date}) табельда sizga «прогул» belgilandi.\nAgar bu xato deb hisoblasangiz, HR ga murojaat qiling yoki ✉️ Adminga ariza yuboring.",
@@ -131,7 +131,7 @@ var MSG = {
     menu: "Выберите раздел:",
     ps_title: "Расчётный лист", ps_time: "Рабочее время", ps_plan: "План дней", ps_fact: "Отработано дней", ps_inc: "Начисления", ps_ded: "Удержания", ps_inc_total: "Итого начислено", ps_ded_total: "Итого удержано", ps_net: "К ВЫДАЧЕ",
     ps_oklad: "Оклад", ps_acc_bank: "Начисление (бух)", ps_acc_cash: "Начисление (наличка)", ps_bonus: "Премия (пластик)", ps_vac: "Отпуск", ps_sick: "Больничный", ps_comp: "Компенсация",
-    ps_adv_card: "Аванс (пластик)", ps_install: "Рассрочка (долг)", ps_fine: "Штрафы", ps_adv_cash: "Аванс (наличка)", ps_flat: "Квартира", ps_debt_rest: "Остаток долга", ps_foot: "Расчётный лист сформирован автоматически. Вопросы — ✉️ Заявка админу",
+    ps_adv_card: "Аванс (пластик)", ps_install: "Рассрочка (долг)", ps_fine: "Штрафы", ps_adv_cash: "Аванс (наличка)", ps_flat: "Квартирные", ps_debt_rest: "Остаток долга", ps_foot: "Расчётный лист сформирован автоматически. Вопросы — ✉️ Заявка админу",
     cal_wd: ["Пн","Вт","Ср","Чт","Пт","Сб","Вс"], cal_week: "-я нед.", cal_worked: "Отработано", cal_half: "Полдня", cal_abs: "Прогул", cal_vac: "Отпуск", cal_sick: "Больничный", cal_bs: "Бс", cal_un: "Не отмечено", cal_extra: "Доп. часы",
     cal_caption: "Ваш табель за {month}. Вопросы — HR или ✉️ Заявка админу.",
     abs_alert: "⚠️ Сегодня ({date}) в табеле вам отмечен «прогул».\nЕсли считаете это ошибкой — обратитесь в HR или отправьте ✉️ заявку админу.",
@@ -1395,12 +1395,14 @@ function debtReport(pinfl, L) {
 var PS = { PLAN: 6, FACT: 7, OKLAD: 8, ACC_BANK: 11, ADV_CARD: 12, INSTALL: 13, FINE: 14, DED_TOTAL: 15, BONUS: 16, VAC: 17, SICK: 18, COMP: 19, ACC_CASH: 22, ADV_CASH: 23, FLAT: 24, TOTAL: 26 };
 function payslipData(r, L) {
   var M = MSG[L], n = function (i) { return numVal(r[i]); };
-  // ЗП итог (AA) ichida: jarima AYRILGAN, ta'til/kasallik/kompensatsiya QO'SHILGAN; avans, rassrochka, kvartira ayrilmagan.
-  // Shuning uchun jarima faqat ma'lumot uchun ko'rsatiladi (ikkinchi marta ayrilmaydi), qolgan ushlanmalar ayriladi.
+  // ЗП итог (AA) ichida: jarima AYRILGAN, ta'til/kasallik/kompensatsiya QO'SHILGAN; avans va rassrochka ayrilmagan.
+  // Квартира пули — qo'shimcha daromad (ushlanma emas), ЗП итогга kirmaydi → qo'shiladi.
+  // Jarima faqat ma'lumot uchun ko'rsatiladi (ikkinchi marta ayrilmaydi).
   var inc = [[M.ps_oklad, n(PS.OKLAD)], [M.ps_acc_bank, n(PS.ACC_BANK)], [M.ps_acc_cash, n(PS.ACC_CASH)], [M.ps_bonus, n(PS.BONUS)], [M.ps_vac, n(PS.VAC)], [M.ps_sick, n(PS.SICK)], [M.ps_comp, n(PS.COMP)]];
   if (n(PS.FINE)) inc.push([M.ps_fine, -n(PS.FINE)]);
-  var ded = [[M.ps_adv_card, n(PS.ADV_CARD)], [M.ps_install, n(PS.INSTALL)], [M.ps_adv_cash, n(PS.ADV_CASH)], [M.ps_flat, n(PS.FLAT)]];
-  var total = n(PS.TOTAL), dedTotal = n(PS.ADV_CARD) + n(PS.INSTALL) + n(PS.ADV_CASH) + n(PS.FLAT);
+  if (n(PS.FLAT)) inc.push([M.ps_flat, n(PS.FLAT)]);
+  var ded = [[M.ps_adv_card, n(PS.ADV_CARD)], [M.ps_install, n(PS.INSTALL)], [M.ps_adv_cash, n(PS.ADV_CASH)]];
+  var total = n(PS.TOTAL) + n(PS.FLAT), dedTotal = n(PS.ADV_CARD) + n(PS.INSTALL) + n(PS.ADV_CASH);
   var pinfl = String(r[COL.PINFL]).trim(), dd = debtData(pinfl), rest = Object.keys(dd.total_rest).map(function (c) { return fmtMoney(dd.total_rest[c], c); }).join(' + ');
   return { period: String(r[COL.PERIOD]), fio: String(r[COL.FIO]), position: String(r[4] || ''), plan: n(PS.PLAN), fact: n(PS.FACT),
     inc: inc.filter(function (x) { return x[1]; }), ded: ded.filter(function (x) { return x[1]; }), total: total, dedTotal: dedTotal, net: total - dedTotal, debtRest: rest };
