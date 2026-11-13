@@ -18,16 +18,42 @@ var SHEET_BASE = 'база';
 var SHEET_TG   = 'Telegram';
 var SHEET_LOG  = 'Log';
 var SHEET_BONUS = 'надбавка';   // qo'shimcha to'lov varag'i (A ПИНФЛ, G..W oylar/kvartal, W Итог)
-var BONUS_YEAR = '2026';
+function bonusYear() { return prop('BONUS_' + 'YEAR') || String(tabelYear()); } // надбавка varag'i yili
 var SHEET_NAMES = 'ФИО табель';    // ПИНФЛ -> Табельдаги Ф.И.О. mosligi
 var SHEET_DEBT = 'qarz_daftari';   // xodimlar qarzlari: har qator — bitta qarz
 var DB = { PINFL: 0, FIO: 1, AMOUNT: 4, CUR: 5, MONTHLY: 6, PERIODS: 7, ISSUED: 8, DUE: 9, NOTE: 10, SRC: 11, PAID: 12, REST: 13, STATUS: 14, P1: 15, TOTAL: 27 };
 // Табель: Script property TABEL_ID (fayl ID). Har oy = varaq. B ФИО, D dan boshlab har kun 2 ustun (belgi, qo'shimcha soat)
 var TAB = { FIO: 1, DAY0: 3 }; // EXTRA/DAYS ustunlari oy uzunligiga bog'liq — tabCols(midx) orqali olinadi
-var TABEL_YEAR = 2026; // Табель fayli qaysi yil uchun (TABEL_ID shu yilga tegishli)
-function daysInMonth(midx) { return new Date(TABEL_YEAR, midx + 1, 0).getDate(); }
+// Табель yili va fayli Script properties'da: TABEL_YEAR (joriy yil, standart 2026), TABEL_ID (joriy yil fayli),
+// TABEL_ID_<yil> (o'tgan yillar arxivi). Yangi yilda admin botga «/newyear <yangi Табель havolasi>» yozadi — kod o'zgarmaydi.
+var YEAR_CTX = null; // shu so'rov ichida qaysi yil fayli bilan ishlanyapti (null = joriy yil)
+function tabelYear() { var y = Number(prop('TABEL_YEAR')); return y >= 2020 && y <= 2100 ? y : 2026; }
+function defaultYear() { var y = new Date().getFullYear(); return tabelIdFor(y) ? y : tabelYear(); } // kalendar yili uchun fayl bo'lsa — o'sha
+function ctxYear() { return YEAR_CTX || defaultYear(); }
+/** Oy indeksi qaysi yilga tegishli: kelajakdagi oy (masalan yanvarda «Декабрь») — o'tgan yil, agar o'sha yil fayli bo'lsa */
+function yearForMonth(midx) {
+  var now = new Date(), y = now.getFullYear();
+  if (midx > now.getMonth() && tabelIdFor(y - 1)) return y - 1;
+  return tabelIdFor(y) ? y : tabelYear();
+}
+/** Xodim/rahbar tanlashi mumkin bo'lgan oylar: joriy yil fayli + yanvar-fevralda o'tgan yil dekabri */
+function tabelMonthList() {
+  YEAR_CTX = null;
+  var list = tabelMonthSheets(tabelFile()), now = new Date();
+  if (now.getMonth() < 2 && tabelIdFor(now.getFullYear() - 1) && !list.some(function (m) { return m.idx === 11; })) {
+    var prev = tabelSheetFor(now.getFullYear() - 1, 11); YEAR_CTX = null;
+    if (prev) list.push({ name: RU_MONTHS[11], idx: 11 });
+  }
+  return list;
+}
+function tabelIdFor(year) { return prop('TABEL_ID_' + year) || (year === tabelYear() ? prop('TABEL_ID') : null); }
+function daysInMonth(midx) { return new Date(ctxYear(), midx + 1, 0).getDate(); }
 function tabCols(midx) { var nd = daysInMonth(midx); return { nd: nd, EXTRA: TAB.DAY0 + nd * 2, DAYS: TAB.DAY0 + nd * 2 + 1 }; }
-function tabelSheetFor(year, midx) { return year === TABEL_YEAR ? tabelFile().getSheetByName(RU_MONTHS[midx]) : null; } // boshqa yil — Табель fayli yo'q
+function tabelSheetFor(year, midx) { // shu yil uchun Табель fayli bo'lmasa — null
+  if (!tabelIdFor(year)) return null;
+  YEAR_CTX = year;
+  return tabelFile().getSheetByName(RU_MONTHS[midx]);
+}
 function tabValues(sheet) { return sheet.getRange(1, 1, sheet.getLastRow(), Math.max(sheet.getLastColumn(), TAB.DAY0 + 2)).getValues(); }
 var RU_MONTHS = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
 
@@ -49,10 +75,11 @@ var SHOW = [
 // Telegram varaqi ustunlari
 var T = { PINFL: 0, HR_PHONE: 1, TG_ID: 2, TG_PHONE: 3, USERNAME: 4, NAME: 5, STATUS: 6, LANG: 7, DATE: 8, ROLE: 9 };
 var TG_HEADER = ['ПИНФЛ', 'Telefon (kadrlar)', 'Telegram ID', 'Telegram telefon', 'Username', 'Ism', 'Status', 'Til', 'Sana', 'Роль'];
-var BOT_VERSION = '2026-10-23.2';
+var BOT_VERSION = '2026-11-13.2';
 var COMPANY = '«Artel electronics manufacturing» MCHJ'; // hisob varaqasi sarlavhasi
 var API_CACHE_SEC = 900; // Mini App ma'lumotlari keshi (soniya); warmApiCache() har 5 daqiqada yangilab turadi
 var WARM_MINUTES = 5;
+var WARM_FROM_HOUR = 7, WARM_TO_HOUR = 20; // kesh faqat shu soatlar orasida isitiladi
 var REPORT_HOUR = 10;
 var ALERT_HOUR = 18;       // прогул ogohlantirishi soati (табель kun davomida to'ldiriladi)
 var DEBT_REMIND_DAYS = 3;  // qarz yopilish sanasidan necha kun oldin eslatish
@@ -240,6 +267,7 @@ function splitMessage(text, max) { // qatorlar bo'yicha bo'ladi
   if (text.length <= max) return [text];
   var out = [], cur = '';
   text.split('\n').forEach(function (line) {
+    while (line.length > max) { if (cur) { out.push(cur); cur = ''; } out.push(line.slice(0, max)); line = line.slice(max); } // bitta juda uzun qator
     if ((cur + '\n' + line).length > max && cur) { out.push(cur); cur = line; } else cur = cur ? cur + '\n' + line : line;
   });
   if (cur) out.push(cur);
@@ -332,7 +360,7 @@ function langKb() { return { inline_keyboard: [[{ text: "O'zbekcha", callback_da
 var ADMIN_HELP = '<b>Admin buyruqlari</b>\n' +
   '/stats — ro\'yxat statistikasi\n/pending — tasdiq kutayotganlar (tugmalar bilan)\n' +
   '/broadcast matn — barcha faol xodimlarga xabar (avval ko\'rsatadi, keyin tasdiqlaysiz)\n' +
-  '/unlink ПИНФЛ — bog\'lanishni bekor qilish\n/find familiya — AI ism qidiruvini tekshirish\n/version — bot versiyasi\n/id — Telegram ID\n\n' +
+  '/unlink ПИНФЛ — bog\'lanishni bekor qilish\n/newyear havola — yangi yil Табель faylini ulash\n/chart, /payslip — diagramma va hisob varaqasi tekshiruvi\n/find familiya — AI ism qidiruvini tekshirish\n/version — bot versiyasi\n/id — Telegram ID\n\n' +
   '<b>AI yordamchi</b> (rahbarlar): botga erkin savol yozing yoki ovozli xabar yuboring — masalan «Aliyevning avgust oyligi», «Bugun kim kelmadi?»\n' +
   'Xodimga xabar (faqat admin): «Karimovga xabar yubor: ertaga 8:00 da yig\'ilish» → tasdiqlaysiz → xodimga bot orqali boradi.';
 
@@ -412,6 +440,7 @@ function handleMessage(m) {
     if (text === '/pending') return adminPending(chat);
     if (text.indexOf('/broadcast') === 0) return adminBroadcast(uid, chat, text.replace('/broadcast', '').trim());
     if (text === '/admin') return send(chat, ADMIN_HELP);
+    if (text.indexOf('/newyear') === 0) return adminNewYear(chat, text.replace('/newyear', '').trim());
     if (text === '/payslip') { // hisob varaqasi diagnostikasi (adminning o'z oxirgi oyi)
       if (typeof Slides === 'undefined') return send(chat, '⚠️ Slides API xizmati yoqilmagan.\nApps Script → chap paneldagi <b>Services</b> yonidagi «+» → <b>Google Slides API</b> → Add. Keyin saqlab, /payslip ni qayta yozing.');
       try { var pr = rowsForPinfl(rec ? String(rec.v[T.PINFL]).trim() : ''); if (!pr.length) return send(chat, 'Sizning ПИНФЛ bo\'yicha база da qator yo\'q — avval ro\'yxatdan o\'ting.'); var bl2 = payslipImage(payslipData(pr[pr.length - 1], 'uz'), 'uz'); var r2 = tg('sendPhoto', { chat_id: String(chat), photo: bl2, caption: 'test' }, true); return send(chat, r2 && r2.ok ? '✅ Hisob varaqasi ishlaydi' : '⚠️ sendPhoto: ' + esc(JSON.stringify(r2).slice(0, 500))); }
@@ -811,22 +840,39 @@ function monthlyReport() {
 }
 /** Har oyning 2-sanasida: ro'yxatdan o'tgan har bir xodimga o'tgan oy davomati — kalendar rasm */
 function employeeMonthlyReports() {
+  var t0 = Date.now(), P = PropertiesService.getScriptProperties();
+  ScriptApp.getProjectTriggers().forEach(function (t) { if (t.getHandlerFunction() === 'employeeMonthlyReports') ScriptApp.deleteTrigger(t); }); // bir martalik davom triggerlari
   var dt = new Date(); dt.setDate(1); dt.setMonth(dt.getMonth() - 1);
-  var midx = dt.getMonth(), sheet = tabelSheetFor(dt.getFullYear(), midx);
+  var midx = dt.getMonth(), ym = dt.getFullYear() + '-' + (midx + 1), sheet = tabelSheetFor(dt.getFullYear(), midx);
   if (!sheet) return;
-  var rows = tabelRowMap(sheet, midx), names = tabelNameMap(), ok = 0, fail = 0, none = 0;
-  tgRows().forEach(function (r) {
-    if (r[T.STATUS] !== 'active' || !r[T.TG_ID]) return;
-    var pinfl = String(r[T.PINFL]).trim(), L = r[T.LANG] || 'uz', name = names[pinfl] || pinflInBase(pinfl) || '';
-    var row = rows[nameKey(name)];
-    if (!row) { none++; return; }
+  var st = {}; try { st = JSON.parse(P.getProperty('MONTHLY_STATE') || '{}'); } catch (e) {}
+  if (st.ym !== ym) st = { ym: ym, next: 0, ok: 0, fail: 0, none: 0, amb: [] };
+  if (st.done) return; // shu oy uchun allaqachon yuborilgan — takror yuborilmaydi (majburan: resendMonthlyReports)
+  var tm = tabelRowMap(sheet, midx), names = tabelNameMap(), base = baseNameMap(), users = tgRows();
+  for (var i = st.next; i < users.length; i++) {
+    if (Date.now() - t0 > 270000) { // 4,5 daqiqa — 6 daqiqalik limitdan oldin to'xtab, 1 daqiqadan keyin davom etadi
+      st.next = i; P.setProperty('MONTHLY_STATE', JSON.stringify(st));
+      ScriptApp.newTrigger('employeeMonthlyReports').timeBased().after(60000).create();
+      return;
+    }
+    var r = users[i];
+    if (r[T.STATUS] !== 'active' || !r[T.TG_ID]) continue;
+    var pinfl = String(r[T.PINFL]).trim(), L = r[T.LANG] || 'uz', name = names[pinfl] || base[pinfl] || '', k = nameKey(name);
+    if (tm.dups[k]) { st.amb.push(name); continue; } // Табельда bir xil ismli ikki qator — kimniki ekani noaniq, yuborilmaydi
+    var row = tm.rows[k];
+    if (!row) { st.none++; continue; }
+    YEAR_CTX = dt.getFullYear();
     var d = tabelDataFromRow(row, midx, name);
-    if (!d.filled) { none++; return; }
-    try { var res = sendTabelImage(String(r[T.TG_ID]), L, pinfl, midx, d, null); if (res && res.ok) ok++; else fail++; } catch (e) { fail++; }
-  });
-  logAction(prop('ADMIN_ID'), '', 'monthly_employee_reports:' + ok + '/' + fail + '/' + none);
-  send(prop('ADMIN_ID'), '📅 ' + MSG.uz.months[midx] + ' davomati xodimlarga yuborildi: ' + ok + ' ta · yetib bormadi: ' + fail + ' · табельда topilmadi/bo\'sh: ' + none);
+    if (!d.filled) { st.none++; continue; }
+    try { var res = sendTabelImage(String(r[T.TG_ID]), L, pinfl, midx, d, null); if (res && res.ok) st.ok++; else st.fail++; } catch (e) { st.fail++; }
+  }
+  st.done = true; st.next = users.length; P.setProperty('MONTHLY_STATE', JSON.stringify(st));
+  logAction(prop('ADMIN_ID'), '', 'monthly_employee_reports:' + st.ok + '/' + st.fail + '/' + st.none);
+  send(prop('ADMIN_ID'), '📅 ' + MSG.uz.months[midx] + ' davomati xodimlarga yuborildi: ' + st.ok + ' ta · yetib bormadi: ' + st.fail + ' · табельда topilmadi/bo\'sh: ' + st.none +
+    (st.amb.length ? '\n⚠️ Табельда bir xil ism ikki marta uchragani uchun yuborilmadi: ' + st.amb.map(esc).join(', ') : ''));
 }
+/** Qo'lda: shu oy hisobotlarini qaytadan yuborish (holatni tozalaydi) */
+function resendMonthlyReports() { PropertiesService.getScriptProperties().deleteProperty('MONTHLY_STATE'); employeeMonthlyReports(); }
 /** Log varag'ini tozalash: LOG_KEEP_DAYS dan eski yoki LOG_MAX_ROWS dan ortiq eng eski qatorlar o'chiriladi */
 function cleanLog() {
   var sh = SpreadsheetApp.getActive().getSheetByName(SHEET_LOG);
@@ -843,10 +889,39 @@ function cleanLog() {
 /** Trigger uchun: har kuni REPORT_HOUR da admin va barcha rahbarlarga yuboradi. installTriggers() ni bir marta ishga tushiring. */
 function dailyReport() {
   try { cleanLog(); } catch (e) {}
+  try { yearCheck(); } catch (e) {}
   managerTargets().forEach(function (t) {
     try { sendDaily(t.id, t.L, 0, null); } catch (e) {}
   });
   try { debtReminders(); } catch (e) { try { send(prop('ADMIN_ID'), '⚠️ Qarz eslatmasi xatosi: ' + esc(String(e))); } catch (x) {} }
+}
+/** Yil almashganini tekshiradi: joriy yil uchun Табель fayli sozlanmagan bo'lsa — adminga ko'rsatma (kuniga bir marta) */
+function yearCheck() {
+  var y = new Date().getFullYear();
+  if (tabelIdFor(y)) return;
+  send(prop('ADMIN_ID'), '⚠️ <b>' + y + '-yil uchun Табель fayli sozlanmagan.</b>\nDavomat bo\'limlari ishlamaydi. Yangi yil Табель faylini ochib, havolasini botga shunday yuboring:\n<code>/newyear https://docs.google.com/spreadsheets/d/…</code>\n(Eski yil fayli arxiv sifatida saqlanib qoladi.)');
+}
+/** Admin: yangi yil Табель faylini ulash. Eski fayl TABEL_ID_<eski yil> ga ko'chiriladi. */
+function adminNewYear(chat, arg) {
+  arg = String(arg || '');
+  var ym = arg.match(/^\s*(20\d\d)\s+/), m = arg.replace(/^\s*20\d\d\s+/, '').match(/[-\w]{25,}/);
+  if (!m) return send(chat, 'Foydalanish: <code>/newyear [yil] Табель fayli havolasi</code>\nMasalan: <code>/newyear 2027 https://docs.google.com/spreadsheets/d/…</code>\nHozir: ' + tabelYear() + '-yil' + (prop('TABEL_ID') ? ', fayl ulangan ✅' : ', fayl ulanmagan'));
+  var id = m[0], y = ym ? Number(ym[1]) : new Date().getFullYear(), ss;
+  try { ss = SpreadsheetApp.openById(id); } catch (e) { return send(chat, '⚠️ Faylni ochib bo\'lmadi. Havola to\'g\'riligini va sizda (bot egasida) o\'qish huquqi borligini tekshiring.'); }
+  var months = tabelMonthSheets(ss);
+  if (!months.length) return send(chat, '⚠️ Bu faylda oy varaqlari topilmadi («Январь», «Февраль» … nomli varaqlar bo\'lishi kerak). Ulanmadi.');
+  var p = PropertiesService.getScriptProperties(), oldY = tabelYear(), oldId = p.getProperty('TABEL_ID'), note = '';
+  if (y < oldY) { p.setProperty('TABEL_ID_' + y, id); note = '\n' + y + '-yil arxiv fayli sifatida saqlandi. Joriy yil o\'zgarmadi (' + oldY + ').'; }
+  else {
+    if (oldId && oldId !== id) {
+      if (y > oldY) { p.setProperty('TABEL_ID_' + oldY, oldId); note = '\n' + oldY + '-yil fayli arxivda saqlandi (o\'tgan oy hisobotlari ishlaydi).'; }
+      else { p.setProperty('TABEL_ID_PREV', oldId); note = '\n' + y + '-yil fayli almashtirildi (avvalgi ID TABEL_ID_PREV da saqlandi).'; }
+    }
+    p.setProperty('TABEL_ID', id); p.setProperty('TABEL_YEAR', String(y));
+  }
+  try { CacheService.getScriptCache().removeAll(['api_months', 'api_daily:0', 'api_daily:1', 'api_monthly:0', 'api_monthly:1']); } catch (e) {}
+  logAction(prop('ADMIN_ID'), '', 'newyear:' + y);
+  return send(chat, '✅ ' + y + '-yil Табель fayli ulandi: «' + esc(ss.getName()) + '», oylar: ' + months.length + note);
 }
 /** Qarz eslatmalari: yopilish sanasidan DEBT_REMIND_DAYS kun oldin va o'sha kuni — xodimga; oyning 1-sanasida — adminga shu oyda yopiladigan qarzlar ro'yxati */
 function debtReminders() {
@@ -856,16 +931,22 @@ function debtReminders() {
   var today = new Date(); today.setHours(0, 0, 0, 0);
   var byPinfl = {}; tgRows().forEach(function (r) { if (r[T.STATUS] === 'active' && r[T.TG_ID]) byPinfl[String(r[T.PINFL]).trim()] = r; });
   var adminLines = [], sent = 0;
+  // O'tkazib yuborilgan kunlarni qoplash: oxirgi ishlagan kundan beri (ko'pi bilan 7 kun); shu kuni qayta ishlasa — takror yubormaydi
+  var P = PropertiesService.getScriptProperties(), lastRun = parseDate(P.getProperty('DEBT_LAST_RUN')), win = 1;
+  if (lastRun) { lastRun.setHours(0, 0, 0, 0); win = Math.min(7, Math.round((today - lastRun) / 86400000)); }
+  P.setProperty('DEBT_LAST_RUN', Utilities.formatDate(today, Session.getScriptTimeZone(), 'yyyy-MM-dd'));
+  if (win <= 0) return;
+  var hit = function (diff, target) { return diff <= target && diff + win - 1 >= target; }; // shu oynada «target kun qoldi» holati bo'lganmi
   vals.forEach(function (r) {
     var pinfl = String(r[DB.PINFL]).trim(); if (!pinfl || !debtIsOpen(r)) return;
     var due = parseDate(r[DB.DUE]); if (!due) return; due.setHours(0, 0, 0, 0);
     var diff = Math.round((due - today) / 86400000), d = debtItem(r);
     if (today.getDate() === 1 && due.getMonth() === today.getMonth() && due.getFullYear() === today.getFullYear())
       adminLines.push('• ' + esc(String(r[DB.FIO])) + ' — ' + fmtMoney(d.rest, d.currency) + ' (' + d.due + (d.note ? ', ' + esc(d.note) : '') + ')');
-    if (diff !== DEBT_REMIND_DAYS && diff !== 0) return;
+    if (!hit(diff, DEBT_REMIND_DAYS) && !hit(diff, 0)) return;
     var u = byPinfl[pinfl]; if (!u) return;
     var L = u[T.LANG] || 'uz', M = MSG[L];
-    var txt = (diff === 0 ? M.debt_remind_today : M.debt_remind).replace('{date}', d.due).replace('{amount}', fmtMoney(d.amount, d.currency)).replace('{rest}', fmtMoney(d.rest, d.currency)).replace('{note}', d.note ? ' (' + esc(d.note) + ')' : '');
+    var txt = (diff <= 0 ? M.debt_remind_today : M.debt_remind).replace('{date}', d.due).replace('{amount}', fmtMoney(d.amount, d.currency)).replace('{rest}', fmtMoney(d.rest, d.currency)).replace('{note}', d.note ? ' (' + esc(d.note) + ')' : '');
     try { var res = send(String(u[T.TG_ID]), txt); if (res && res.ok) sent++; } catch (e) {}
   });
   if (adminLines.length) send(prop('ADMIN_ID'), '<b>💳 Shu oyda yopiladigan qarzlar (' + adminLines.length + ')</b>\n' + adminLines.join('\n'));
@@ -875,13 +956,13 @@ function debtReminders() {
 function absenceAlerts() {
   var today = new Date(), midx = today.getMonth(), day = today.getDate();
   var sheet = tabelSheetFor(today.getFullYear(), midx); if (!sheet) return;
-  var rows = tabelRowMap(sheet, midx), names = tabelNameMap(), col = TAB.DAY0 + (day - 1) * 2;
+  var tm = tabelRowMap(sheet, midx), rows = tm.rows, names = tabelNameMap(), base = baseNameMap(), col = TAB.DAY0 + (day - 1) * 2;
   var dateStr = (day < 10 ? '0' : '') + day + '.' + (midx < 9 ? '0' : '') + (midx + 1) + '.' + today.getFullYear();
   var cache = CacheService.getScriptCache(), sent = 0, list = [];
   tgRows().forEach(function (r) {
     if (r[T.STATUS] !== 'active' || !r[T.TG_ID]) return;
-    var pinfl = String(r[T.PINFL]).trim(), name = names[pinfl] || pinflInBase(pinfl) || '', row = rows[nameKey(name)];
-    if (!row || markKind(row[col]) !== 'a') return;
+    var pinfl = String(r[T.PINFL]).trim(), name = names[pinfl] || base[pinfl] || '', k = nameKey(name), row = rows[k];
+    if (!row || tm.dups[k] || markKind(row[col]) !== 'a') return; // bir xil ismli ikki qator bo'lsa — noaniq, ogohlantirilmaydi
     var key = 'abs_' + pinfl + '_' + dateStr; if (cache.get(key)) return; // bir kunda bir marta
     var L = r[T.LANG] || 'uz';
     try { var res = send(String(r[T.TG_ID]), MSG[L].abs_alert.replace('{date}', dateStr)); if (res && res.ok) { sent++; list.push(name); cache.put(key, '1', 21600); } } catch (e) {}
@@ -902,8 +983,10 @@ function installTriggers() {
 }
 /** Mini App uchun eng ko'p so'raladigan ma'lumotlarni oldindan hisoblab keshga yozadi — dashboard darhol ochiladi */
 function warmApiCache() {
+  var hh = new Date().getHours();
+  if (hh < WARM_FROM_HOUR || hh >= WARM_TO_HOUR) return; // tunda isitilmaydi — kunlik trigger limiti (90 daq.) tejaladi; so'rov kelsa o'zi hisoblanadi
   var c = CacheService.getScriptCache(), items = {};
-  try { items['api_months'] = tabelMonthSheets(tabelFile()).map(function (m) { return m.idx; }); } catch (e) {}
+  try { items['api_months'] = tabelMonthList().map(function (m) { return m.idx; }); } catch (e) {}
   try { items['api_daily:0'] = dailyData(0); } catch (e) {}
   try { c.put('api_daily:0', JSON.stringify(items['api_daily:0']), 360); delete items['api_daily:0']; } catch (e) {} // bugungi kun — 6 daqiqa (табель kun davomida to'ldiriladi)
   try { items['api_daily:1'] = dailyData(1); } catch (e) {}
@@ -970,7 +1053,7 @@ function showBonus(chat, rec, L) {
   var r = null;
   for (var i = 0; i < vals.length; i++) if (String(vals[i][0]).trim() === pinfl) { r = vals[i]; break; }
   if (!r) return send(chat, MSG[L].no_bonus, mainMenu(L));
-  var lines = ['<b>' + MSG[L].bonus_title + ' — ' + BONUS_YEAR + '</b>', esc(String(r[1])), ''];
+  var lines = ['<b>' + MSG[L].bonus_title + ' — ' + bonusYear() + '</b>', esc(String(r[1])), ''];
   var any = false;
   for (var q = 0; q < 4; q++) {
     var base = 6 + q * 4; // 6,10,14,18
@@ -997,8 +1080,8 @@ function normName(s) {
   return String(s || '').toLowerCase().replace(/[^a-zа-яёўқғҳ]/g, '');
 }
 function tabelFile() {
-  var id = prop('TABEL_ID');
-  if (!id) throw new Error('TABEL_ID script property yo\'q');
+  var id = tabelIdFor(ctxYear());
+  if (!id) throw new Error('Табель fayli sozlanmagan (' + ctxYear() + '-yil): TABEL_ID script property yo\'q');
   try { return SpreadsheetApp.openById(id); } catch (e) { Utilities.sleep(800); return SpreadsheetApp.openById(id); } // vaqtinchalik xatoda qayta urinish
 }
 function tabelMonthSheets(ss) { // [{name, idx}] mavjud oylar, oxirgisi birinchi
@@ -1040,7 +1123,7 @@ function findTabelRow(sheet, name) {
   return (bestScore >= 4 && ties === 0) ? best : null; // familiya + ism mos, va bitta nomzod
 }
 function tabelMonthsKb(L, prefix) {
-  var months = tabelMonthSheets(tabelFile());
+  var months = tabelMonthList();
   var kb = [];
   for (var i = 0; i < months.length; i += 2) {
     var line = [{ text: MSG[L].months[months[i].idx], callback_data: prefix + ':' + months[i].idx }];
@@ -1067,8 +1150,7 @@ function showTabel(chat, rec, midx) {
 }
 function tabelReport(pinfl, midx, L) {
   try {
-    var ss = tabelFile();
-    var sheet = ss.getSheetByName(RU_MONTHS[midx]);
+    var sheet = tabelSheetFor(yearForMonth(midx), midx);
     if (!sheet) return MSG[L].tabel_nodata;
     var name = tabelNameFor(pinfl);
     var r = findTabelRow(sheet, name);
@@ -1089,7 +1171,7 @@ function tabelReport(pinfl, midx, L) {
     if (!st.any) return MSG[L].tabel_nodata;
     var days = (typeof r[tc.DAYS] === 'number') ? r[tc.DAYS] : st.worked;
     var extra = (typeof r[tc.EXTRA] === 'number') ? r[tc.EXTRA] : st.extra;
-    var lines = ['<b>' + MSG[L].tabel_title + ' — ' + MSG[L].months[midx] + ' ' + TABEL_YEAR + '</b>', esc(name), '',
+    var lines = ['<b>' + MSG[L].tabel_title + ' — ' + MSG[L].months[midx] + ' ' + ctxYear() + '</b>', esc(name), '',
       MSG[L].t_worked + ': <b>' + fmtNum(days, 0) + '</b> ' + MSG[L].t_days + ' · ' + MSG[L].t_extra + ': <b>' + fmtNum(extra, 0) + '</b>',
       MSG[L].t_vac + ': ' + st.vac + ' · ' + MSG[L].t_sick + ': ' + st.sick + ' · ' + MSG[L].t_bs + ': ' + st.bs + (st.half ? ' · ' + MSG[L].t_half + ': ' + st.half : ''),
       MSG[L].t_absent + ': <b>' + st.absent.length + '</b>'];
@@ -1190,6 +1272,7 @@ function verifyInitData(initData) {
   try { return JSON.parse(data.user); } catch (e) { return null; }
 }
 function handleApi(req) {
+  YEAR_CTX = null;
   var user = verifyInitData(req.initData);
   if (!user) return { ok: false, error: 'auth' };
   var uid = user.id;
@@ -1200,7 +1283,7 @@ function handleApi(req) {
   try {
     switch (req.api) {
       case 'init': case 'boot': {
-        var months = cached('months', function () { return tabelMonthSheets(tabelFile()).map(function (m) { return m.idx; }); });
+        var months = cached('months', function () { return tabelMonthList().map(function (m) { return m.idx; }); });
         var today = new Date();
         var res = { ok: true, lang: L, name: user.first_name || '', today: [today.getFullYear(), today.getMonth(), today.getDate()], tabelMonths: months, version: BOT_VERSION };
         if (req.api === 'boot') res.daily = cached('daily:0', function () { return dailyData(0); }, 360); // bitta so'rovda ikkalasi
@@ -1302,7 +1385,7 @@ function salaryData(pinfl) {
     months: rows.map(function (r) { return { period: String(r[COL.PERIOD]), values: SHOW.map(function (c) { var v = r[c.i]; return typeof v === 'number' ? v : (parseFloat(String(v).replace(/\s|\u00a0/g, '').replace(',', '.')) || 0); }) }; }) };
 }
 function tabelData(pinfl, midx) {
-  var sheet = tabelFile().getSheetByName(RU_MONTHS[midx]);
+  var sheet = tabelSheetFor(yearForMonth(midx), midx);
   var name = tabelNameFor(String(pinfl)), out = { midx: midx, name: name, found: false, days: [], w: 0, h: 0, a: 0, v: 0, s: 0, b: 0, extra: 0, totalDays: null };
   if (!sheet) return out;
   var r = findTabelRow(sheet, name);
@@ -1337,9 +1420,15 @@ function tabelNameMap() {
   return map;
 }
 /** Табель varag'ini bir marta o'qib, nameKey → qator xaritasi */
-function tabelRowMap(sheet, midx) {
-  var map = {};
-  tabelRows(sheet, midx).forEach(function (e) { var k = nameKey(e.fio); if (!map[k]) map[k] = e.row; });
+function tabelRowMap(sheet, midx) { // {rows: kalit → qator, dups: bir xil ismli (noaniq) kalitlar}
+  var rows = {}, dups = {};
+  tabelRows(sheet, midx).forEach(function (e) { var k = nameKey(e.fio); if (rows[k]) dups[k] = e.fio; else rows[k] = e.row; });
+  return { rows: rows, dups: dups };
+}
+/** ПИНФЛ → база dagi F.I.O. (bir o'qishda) */
+function baseNameMap() {
+  var sh = SpreadsheetApp.getActive().getSheetByName(SHEET_BASE), map = {};
+  sh.getRange(2, COL.PINFL + 1, sh.getLastRow() - 1, 2).getValues().forEach(function (v) { var p = String(v[0]).trim(); if (p) map[p] = String(v[1]); });
   return map;
 }
 
@@ -1357,7 +1446,7 @@ function debtRows(pinfl) {
   for (var i = 0; i < vals.length; i++) if (String(vals[i][DB.PINFL]).trim() === String(pinfl)) out.push(vals[i]);
   return out;
 }
-function debtIsOpen(r) { var st = String(r[DB.STATUS] || '').toLowerCase(); return st.indexOf('закр') < 0 && st.indexOf('yop') < 0 && st.indexOf('закрыт') < 0; }
+function debtIsOpen(r) { return !/^(закр|yopilgan|yopildi|closed)/.test(String(r[DB.STATUS] || '').trim().toLowerCase()); } // «не закрыт», «yopilmagan» — ochiq
 function debtItem(r) {
   var pays = []; for (var k = 0; k < 12; k++) { var v = r[DB.P1 + k]; if (v !== '' && v !== null && numVal(v) !== 0) pays.push({ period: k + 1, amount: numVal(v) }); }
   return { amount: numVal(r[DB.AMOUNT]), currency: String(r[DB.CUR] || ''), monthly: numVal(r[DB.MONTHLY]), periods: numVal(r[DB.PERIODS]), issued: fmtD(r[DB.ISSUED]), due: fmtD(r[DB.DUE]),
@@ -1398,13 +1487,14 @@ function payslipData(r, L) {
   // ЗП итог (AA) ichida: jarima AYRILGAN, ta'til/kasallik/kompensatsiya QO'SHILGAN; avans va rassrochka ayrilmagan.
   // Квартира пули — qo'shimcha daromad (ushlanma emas), ЗП итогга kirmaydi → qo'shiladi.
   // Jarima faqat ma'lumot uchun ko'rsatiladi (ikkinchi marta ayrilmaydi).
-  var inc = [[M.ps_oklad, n(PS.OKLAD)], [M.ps_acc_bank, n(PS.ACC_BANK)], [M.ps_acc_cash, n(PS.ACC_CASH)], [M.ps_bonus, n(PS.BONUS)], [M.ps_vac, n(PS.VAC)], [M.ps_sick, n(PS.SICK)], [M.ps_comp, n(PS.COMP)]];
+  // Oklad — stavka (hisoblangan summa emas), shuning uchun «Ish vaqti» bo'limida ko'rsatiladi; hisoblanganlar yig'indisi = Jami hisoblangan
+  var inc = [[M.ps_acc_bank, n(PS.ACC_BANK)], [M.ps_acc_cash, n(PS.ACC_CASH)], [M.ps_bonus, n(PS.BONUS)], [M.ps_vac, n(PS.VAC)], [M.ps_sick, n(PS.SICK)], [M.ps_comp, n(PS.COMP)]];
   if (n(PS.FINE)) inc.push([M.ps_fine, -n(PS.FINE)]);
   if (n(PS.FLAT)) inc.push([M.ps_flat, n(PS.FLAT)]);
   var ded = [[M.ps_adv_card, n(PS.ADV_CARD)], [M.ps_install, n(PS.INSTALL)], [M.ps_adv_cash, n(PS.ADV_CASH)]];
   var total = n(PS.TOTAL) + n(PS.FLAT), dedTotal = n(PS.ADV_CARD) + n(PS.INSTALL) + n(PS.ADV_CASH);
   var pinfl = String(r[COL.PINFL]).trim(), dd = debtData(pinfl), rest = Object.keys(dd.total_rest).map(function (c) { return fmtMoney(dd.total_rest[c], c); }).join(' + ');
-  return { period: String(r[COL.PERIOD]), fio: String(r[COL.FIO]), position: String(r[4] || ''), plan: n(PS.PLAN), fact: n(PS.FACT),
+  return { period: String(r[COL.PERIOD]), fio: String(r[COL.FIO]), position: String(r[4] || ''), plan: n(PS.PLAN), fact: n(PS.FACT), oklad: n(PS.OKLAD),
     inc: inc.filter(function (x) { return x[1]; }), ded: ded.filter(function (x) { return x[1]; }), total: total, dedTotal: dedTotal, net: total - dedTotal, debtRest: rest };
 }
 function payslipPresentation() { // bitta doimiy taqdimot (ID Script property'da), har safar yangi slayd chiziladi va o'chiriladi
@@ -1414,10 +1504,25 @@ function payslipPresentation() { // bitta doimiy taqdimot (ID Script property'da
   p.setProperty('PAYSLIP_PRES_ID', created.presentationId);
   return SlidesApp.openById(created.presentationId);
 }
+function fmtDays(v) { return fmtNum(v, v % 1 ? 1 : 0); } // 21,5 kun yaxlitlanmaydi
+/** Matnli hisob varaqasi (rasm ostidagi izoh va Slides ishlamagandagi zaxira) — rasm bilan bir xil raqamlar */
+function payslipText(d, L) {
+  var M = MSG[L], lines = ['<b>' + M.report_title + ' — ' + esc(d.period) + '</b>', esc(d.fio), '',
+    M.ps_plan + ': ' + fmtDays(d.plan) + ' · ' + M.ps_fact + ': ' + fmtDays(d.fact) + (d.oklad ? ' · ' + M.ps_oklad + ': ' + fmtNum(d.oklad, 0) : ''), ''];
+  d.inc.forEach(function (x) { lines.push(x[0] + ': ' + (x[1] < 0 ? '− ' : '') + fmtNum(Math.abs(x[1]), 0) + ' ' + M.sum); });
+  lines.push('<b>' + M.ps_inc_total + ': ' + fmtNum(d.total, 0) + ' ' + M.sum + '</b>');
+  if (d.ded.length) { lines.push(''); d.ded.forEach(function (x) { lines.push(x[0] + ': − ' + fmtNum(x[1], 0) + ' ' + M.sum); }); }
+  lines.push('', '<b>' + M.ps_net + ': ' + fmtNum(d.net, 0) + ' ' + M.sum + '</b>');
+  return lines.join('\n');
+}
 function payslipImage(d, L) {
-  var M = MSG[L], lock = LockService.getScriptLock(); lock.waitLock(30000);
+  // Alohida (hujjat) qulf — ro'yxatdan o'tish/tasdiqlash ishlatadigan skript qulfini band qilmaydi
+  var M = MSG[L], lock = LockService.getDocumentLock() || LockService.getScriptLock(); lock.waitLock(30000);
+  var presId = null, slideId = null;
   try {
-    var pres = payslipPresentation(), slide = pres.appendSlide(SlidesApp.PredefinedLayout.BLANK);
+    var pres = payslipPresentation(); presId = pres.getId();
+    try { var old = pres.getSlides(); for (var si = old.length - 1; si >= 1; si--) old[si].remove(); } catch (e) {} // avvalgi xatolardan qolgan slaydlar
+    var slide = pres.appendSlide(SlidesApp.PredefinedLayout.BLANK); slideId = slide.getObjectId();
     var W = 720, y = 0;
     var rect = function (l, t, w, h, color) { var sh = slide.insertShape(SlidesApp.ShapeType.RECTANGLE, l, t, w, h); sh.getFill().setSolidFill(color); sh.getBorder().setTransparent(); return sh; };
     var text = function (str, l, t, w, h, size, color, bold, right) {
@@ -1432,26 +1537,28 @@ function payslipImage(d, L) {
     text(COMPANY + ' — ' + M.ps_title, 28, 12, W - 56, 32, 20, '#FFFFFF', true, false);
     text(d.period + '  ·  ' + d.fio + (d.position ? '  ·  ' + d.position : ''), 28, 48, W - 56, 24, 13, '#FFFFFF', false, false);
     y = 100;
-    section(M.ps_time); line(M.ps_plan, fmtNum(d.plan, 0)); line(M.ps_fact, fmtNum(d.fact, 0));
+    section(M.ps_time); line(M.ps_plan, fmtDays(d.plan)); line(M.ps_fact, fmtDays(d.fact)); if (d.oklad) line(M.ps_oklad, fmtNum(d.oklad, 0) + ' ' + M.sum);
     section(M.ps_inc); d.inc.forEach(function (x) { line(x[0], (x[1] < 0 ? '− ' : '') + fmtNum(Math.abs(x[1]), 0) + ' ' + M.sum, x[1] < 0 ? { color: '#C62828' } : {}); }); line(M.ps_inc_total, fmtNum(d.total, 0) + ' ' + M.sum, { bold: true });
     if (d.ded.length) { section(M.ps_ded); d.ded.forEach(function (x) { line(x[0], '− ' + fmtNum(x[1], 0) + ' ' + M.sum, { color: '#C62828' }); }); line(M.ps_ded_total, '− ' + fmtNum(d.dedTotal, 0) + ' ' + M.sum, { color: '#C62828', bold: true }); }
     y += 6; rect(28, y, W - 56, 44, '#E8F5E9');
     text(M.ps_net, 40, y, 300, 44, 18, '#1B5E20', true, false); text(fmtNum(d.net, 0) + ' ' + M.sum, 360, y, 320, 44, 18, '#1B5E20', true, true); y += 54;
     text((d.debtRest ? M.ps_debt_rest + ': ' + d.debtRest + '  ·  ' : '') + M.ps_foot, 40, y, W - 80, 22, 10, '#888888', false, false);
     pres.saveAndClose();
-    var th = Slides.Presentations.Pages.getThumbnail(pres.getId(), slide.getObjectId(), { 'thumbnailProperties.mimeType': 'PNG', 'thumbnailProperties.thumbnailSize': 'LARGE' });
-    var blob = UrlFetchApp.fetch(th.contentUrl).getBlob().setName('hisob_varaqasi.png');
-    try { SlidesApp.openById(pres.getId()).getSlideById(slide.getObjectId()).remove(); } catch (e) {}
-    return blob;
-  } finally { lock.releaseLock(); }
+    var th = Slides.Presentations.Pages.getThumbnail(presId, slideId, { 'thumbnailProperties.mimeType': 'PNG', 'thumbnailProperties.thumbnailSize': 'LARGE' });
+    return UrlFetchApp.fetch(th.contentUrl).getBlob().setName('hisob_varaqasi.png');
+  } finally {
+    if (presId && slideId) { try { SlidesApp.openById(presId).getSlideById(slideId).remove(); } catch (e) {} } // xato bo'lsa ham slayd qolmaydi
+    lock.releaseLock();
+  }
 }
 /** Hisob varaqasini rasm bilan yuboradi (caption — matnli hisobot); Slides ishlamasa — faqat matn */
 function sendPayslip(chat, L, r, kb) {
-  var txt = buildReport(r, L);
+  var d = payslipData(r, L), txt = payslipText(d, L);
   try {
     if (typeof Slides === 'undefined') throw new Error('Slides API xizmati yoqilmagan (Apps Script → Services → Slides API)');
-    var blob = payslipImage(payslipData(r, L), L);
-    var p = { chat_id: String(chat), photo: blob, caption: txt.length > 1000 ? txt.slice(0, 990) + '…' : txt, parse_mode: 'HTML' };
+    var blob = payslipImage(d, L);
+    var p = { chat_id: String(chat), photo: blob, parse_mode: 'HTML' };
+    if (txt.length <= 1000) p.caption = txt; // sig'masa izohsiz — rasmning o'zida hammasi bor
     if (kb) p.reply_markup = JSON.stringify(kb);
     var res = tg('sendPhoto', p, true);
     if (res && res.ok) return res;
@@ -1510,7 +1617,7 @@ function sendTabelImage(chat, L, pinfl, midx, d, kb) {
   try {
     if (!d) d = tabelData(pinfl, midx);
     if (d && d.found && d.days.some(function (x) { return x.k !== 'u'; })) {
-      var blob = chartPng(tabelCalendarConfig(d, L, TABEL_YEAR), 'tabel.png');
+      var blob = chartPng(tabelCalendarConfig(d, L, ctxYear()), 'tabel.png');
       var absent = d.days.filter(function (x) { return x.k === 'a'; }).map(function (x) { return (x.d < 10 ? '0' : '') + x.d + '.' + (midx < 9 ? '0' : '') + (midx + 1); });
       var cap = M.cal_caption.replace('{month}', M.months[midx]) + (absent.length ? '\n' + M.t_absent_days + ': ' + absent.join(', ') : '');
       var p = { chat_id: String(chat), photo: blob, caption: cap, parse_mode: 'HTML' };
@@ -1574,7 +1681,7 @@ function dailyCaption(d, L) {
     lines.push('<b>' + esc(s.name) + '</b>: ' + s.people.map(function (p) { return esc(p.fio) + ' (' + (p.k === 'a' ? MSG[L].mark_abs : p.k === 'v' ? MSG[L].mark_vac : p.k === 's' ? MSG[L].mark_sick : p.k === 'b' ? MSG[L].mark_bs : p.k === 'h' ? MSG[L].mark_half : esc(p.raw)) + ')'; }).join(', '));
   });
   var cap = lines.length ? '<b>' + MSG[L].d_absent_list + ':</b>\n' + lines.join('\n') : '';
-  return cap.length > 1000 ? cap.slice(0, 990) + '…' : cap;
+  return cap; // uzun bo'lsa sendDaily alohida xabar qilib yuboradi (kesilmaydi)
 }
 function chartFail(msg) { // sababi adminga (soatiga 1 martadan ko'p emas)
   Logger.log('Diagramma xatosi: ' + msg);
@@ -1586,12 +1693,12 @@ function sendDaily(chat, L, daysAgo, kb) {
   try { d = daysAgo === 0 ? dailyData(0) : cached('daily:' + daysAgo, function () { return dailyData(daysAgo); }); } catch (e) { d = null; }
   if (d && d.filled && d.total.n) {
     try {
-      var blob = dailyChartBlob(d, L), cap = dailyCaption(d, L);
+      var blob = dailyChartBlob(d, L), cap = dailyCaption(d, L), longCap = cap.length > 1000;
       var p = { chat_id: String(chat), photo: blob, parse_mode: 'HTML' };
-      if (cap) p.caption = cap;
-      if (kb) p.reply_markup = JSON.stringify(kb);
+      if (cap && !longCap) p.caption = cap;
+      if (kb && !longCap) p.reply_markup = JSON.stringify(kb);
       var r = tg('sendPhoto', p, true);
-      if (r && r.ok) return r;
+      if (r && r.ok) return longCap ? send(chat, cap, kb) : r; // ro'yxat sig'masa — to'liq, alohida xabar
       chartFail('sendPhoto: ' + JSON.stringify(r).slice(0, 300));
     } catch (e) { chartFail(String(e)); }
   }
@@ -1638,7 +1745,7 @@ function aiFindEmployees(query) {
   for (var i = vals.length - 1; i >= 0; i--) {
     var p = String(vals[i][COL.PINFL]).trim(), fio = String(vals[i][COL.FIO]).trim();
     if (!p || seen[p]) continue; seen[p] = 1;
-    var fTok = fio.split(/[\s,.]+/).map(nameKey).filter(Boolean), score = 0;
+    var fTok = fio.split(/[\s,.]+/).map(nameKey).filter(Boolean), score = 0, hits = 0;
     qTok.forEach(function (q) {
       var best = 0;
       fTok.forEach(function (f) {
@@ -1647,10 +1754,13 @@ function aiFindEmployees(query) {
         else if (q.length >= 5 && f.length >= 5 && q[0] === f[0] && lev(q, f) <= (Math.min(q.length, f.length) >= 7 ? 2 : 1)) s = 1; // imlo xatosi: bosh harf bir xil
         if (s > best) best = s;
       });
-      score += best;
+      score += best; if (best) hits++;
     });
-    if (score >= Math.min(2, qTok.length * 1)) out.push({ pinfl: p, fio: fio, position: String(vals[i][4] || ''), score: score });
+    if (score >= Math.min(2, qTok.length * 1)) out.push({ pinfl: p, fio: fio, position: String(vals[i][4] || ''), score: score, hits: hits });
   }
+  // Familiya + ism berilgan bo'lsa va ikkalasi ham mos keladigan xodim bor bo'lsa — faqat o'shalar (faqat familiyasi o'xshashlar chiqmaydi)
+  var full = out.filter(function (e) { return e.hits === qTok.length; });
+  if (qTok.length > 1 && full.length) out = full;
   out.sort(function (a, b) { return b.score - a.score; });
   return out.slice(0, 8).map(function (e) { return { pinfl: e.pinfl, fio: e.fio, position: e.position }; });
 }
@@ -1699,6 +1809,7 @@ function aiPeriodMatch(period, rows) { // "avgust 2026" / "август" / "2026
   return best;
 }
 function aiTool(name, a) {
+  YEAR_CTX = null; // har asbob joriy yildan boshlaydi (o'tgan yil kerak bo'lsa tabelSheetFor o'zi o'rnatadi)
   switch (name) {
     case 'find_employee': return { results: aiFindEmployees(a.query) };
     case 'get_salary': {
@@ -1719,11 +1830,11 @@ function aiTool(name, a) {
       for (var i = 0; i < vals.length; i++) if (String(vals[i][0]).trim() === String(a.pinfl)) { row = vals[i]; break; }
       if (!row) return { error: 'no_bonus' };
       var months = {}; for (var q = 0; q < 4; q++) for (var m = 0; m < 3; m++) { var v = row[6 + q * 4 + m]; if (v !== '' && v !== null) months[RU_MONTHS[q * 3 + m]] = v; }
-      return { fio: String(row[1]), year: BONUS_YEAR, months: months, quarter_totals: [row[9], row[13], row[17], row[21]], year_total: row[22] };
+      return { fio: String(row[1]), year: bonusYear(), months: months, quarter_totals: [row[9], row[13], row[17], row[21]], year_total: row[22] };
     }
     case 'get_employee_attendance': {
       var mi = aiMonthIndex(a.month); if (mi < 0) return { error: 'bad_month', hint: 'month: 1=Yanvar … 12=Dekabr yoki oy nomi' };
-      var avail = cached('months', function () { return tabelMonthSheets(tabelFile()).map(function (m) { return m.idx; }); });
+      var avail = cached('months', function () { return tabelMonthList().map(function (m) { return m.idx; }); });
       if (avail.indexOf(mi) < 0) return { error: 'month_not_in_tabel', month: RU_MONTHS[mi], available_months: avail.map(function (i) { return RU_MONTHS[i]; }) };
       var d = tabelData(String(a.pinfl), mi); if (!d.found) return { error: 'not_in_tabel', name: d.name, hint: 'Xodim табельда shu ism bilan topilmadi (ФИО табель varag\'ini tekshiring)' };
       var absent = d.days.filter(function (x) { return x.k === 'a'; }).map(function (x) { return x.d; });
@@ -1736,8 +1847,7 @@ function aiTool(name, a) {
       var found = aiFindEmployees(String(a.employee_name || ''));
       if (!found.length) return { error: 'employee_not_found', query: a.employee_name };
       if (found.length > 1) { // server o'zi tanlash tugmalarini chiqaradi — model taxmin qilmaydi
-        CacheService.getScriptCache().put('msgtext_' + AI_CTX.uid, txt, 1800);
-        AI_CTX.msgPick = found;
+        AI_CTX.msgPick = { list: found, tid: saveMsgText(AI_CTX.uid, txt) };
         return { ok: true, multiple: true, candidates: found.map(function (e) { return e.fio; }), note: 'Bir nechta xodim topildi — foydalanuvchiga tanlash tugmalari ko\'rsatiladi. Javobda faqat «Qaysi xodimga?» deb yozing.' };
       }
       var dr = makeDraft(AI_CTX.uid, found[0].pinfl, txt);
@@ -1832,30 +1942,32 @@ function aiTranscribe(fileId) {
 function makeDraft(uid, pinfl, txt) {
   var ex = findByPinfl(String(pinfl)), fioM = pinflInBase(String(pinfl)) || '';
   if (!ex || !ex.v[T.TG_ID] || ex.v[T.STATUS] !== 'active') return { error: 'not_registered', fio: fioM, hint: 'Xodim botda ro\'yxatdan o\'tmagan — xabar yuborib bo\'lmaydi' };
-  var d = { pinfl: String(pinfl), fio: fioM, tgId: String(ex.v[T.TG_ID]), tgName: String(ex.v[T.NAME] || ''), lang: ex.v[T.LANG] || 'uz', text: txt };
-  CacheService.getScriptCache().put('msgdraft_' + uid, JSON.stringify(d), 1800);
+  var d = { id: shortId(), pinfl: String(pinfl), fio: fioM, tgId: String(ex.v[T.TG_ID]), tgName: String(ex.v[T.NAME] || ''), lang: ex.v[T.LANG] || 'uz', text: txt };
+  CacheService.getScriptCache().put('msgdraft_' + uid + '_' + d.id, JSON.stringify(d), 1800); // har qoralama o'z ID si bilan — eski tugma boshqa xabarni yubormaydi
   return d;
 }
+function shortId() { return Utilities.getUuid().replace(/-/g, '').slice(0, 8); }
+function saveMsgText(uid, txt) { var id = shortId(); CacheService.getScriptCache().put('msgtext_' + uid + '_' + id, txt, 1800); return id; }
 function draftPreview(d) {
   return '📩 <b>Xabar yuborish</b>\n\nKimga: <b>' + esc(d.fio) + '</b>' + (d.tgName ? ' (Telegram: ' + esc(d.tgName) + ')' : '') + '\nПИНФЛ: <code>' + d.pinfl + '</code>\n\nMatn:\n<i>' + esc(d.text) + '</i>';
 }
-function msgPickKb(c) { return { inline_keyboard: c.slice(0, 8).map(function (e) { return [{ text: (e.fio + (e.position ? ' · ' + e.position : '')).slice(0, 60), callback_data: 'smp:' + e.pinfl }]; }) }; }
+function msgPickKb(c, tid) { return { inline_keyboard: c.slice(0, 8).map(function (e) { return [{ text: (e.fio + (e.position ? ' · ' + e.position : '')).slice(0, 60), callback_data: 'smp:' + e.pinfl + ':' + tid }]; }) }; }
 /** Xabar uchun xodim tugma bilan tanlandi */
 function pickMsgRecipient(uid, chat, q) {
-  var txt = CacheService.getScriptCache().get('msgtext_' + uid);
-  if (!txt) return send(chat, '⚠️ Xabar matni topilmadi (30 daqiqa o\'tgan). Qaytadan yozing.', mainMenu('uz'));
-  var d = makeDraft(uid, q.data.split(':')[1], txt);
+  var pp = q.data.split(':'), txt = pp[2] ? CacheService.getScriptCache().get('msgtext_' + uid + '_' + pp[2]) : null;
+  if (!txt) return send(chat, '⚠️ Xabar matni topilmadi (eski tugma yoki 30 daqiqa o\'tgan). Qaytadan yozing.', mainMenu('uz'));
+  var d = makeDraft(uid, pp[1], txt);
   if (d.error) return send(chat, '⚠️ ' + esc(d.fio || '') + ' botda ro\'yxatdan o\'tmagan — xabar yuborib bo\'lmaydi.', mainMenu('uz'));
-  return send(chat, draftPreview(d), msgConfirmKb());
+  return send(chat, draftPreview(d), msgConfirmKb(d.id));
 }
-function msgConfirmKb() { return { inline_keyboard: [[{ text: '✅ Yuborish', callback_data: 'sm:yes' }, { text: '❌ Bekor', callback_data: 'sm:no' }]] }; }
+function msgConfirmKb(id) { return { inline_keyboard: [[{ text: '✅ Yuborish', callback_data: 'sm:yes:' + id }, { text: '❌ Bekor', callback_data: 'sm:no:' + id }]] }; }
 /** Admin «Yuborish» ni bosdi — xabar xodimga ketadi */
 function sendDraftMessage(uid, chat, q) {
-  var raw = CacheService.getScriptCache().get('msgdraft_' + uid);
+  var qp = q.data.split(':'), key = 'msgdraft_' + uid + '_' + (qp[2] || ''), raw = qp[2] ? CacheService.getScriptCache().get(key) : null;
   var done = function (t) { try { tg('editMessageText', { chat_id: chat, message_id: q.message.message_id, text: (q.message.text || '') + '\n\n' + t }); } catch (e) {} };
-  if (q.data === 'sm:no') { CacheService.getScriptCache().remove('msgdraft_' + uid); return done('❌ Bekor qilindi'); }
-  if (!raw) return done('⚠️ Xabar topilmadi (30 daqiqa o\'tgan). Qaytadan yozing.');
-  var d = JSON.parse(raw); CacheService.getScriptCache().remove('msgdraft_' + uid);
+  if (qp[1] === 'no') { CacheService.getScriptCache().remove(key); return done('❌ Bekor qilindi'); }
+  if (!raw) return done('⚠️ Xabar topilmadi (eski tugma yoki 30 daqiqa o\'tgan). Qaytadan yozing.');
+  var d = JSON.parse(raw); CacheService.getScriptCache().remove(key);
   var exNow = findByPinfl(d.pinfl); // yuborish paytida qayta tekshiruv: ПИНФЛ → hozirgi Telegram ID
   if (!exNow || String(exNow.v[T.TG_ID]) !== d.tgId || exNow.v[T.STATUS] !== 'active') return done('⚠️ Qabul qiluvchi ma\'lumoti o\'zgargan — yuborilmadi. Qaytadan yozing.');
   var Lr = MSG[d.lang] ? d.lang : 'uz';
@@ -1865,8 +1977,8 @@ function sendDraftMessage(uid, chat, q) {
 }
 /** AI javobini yetkazish: xabar qoralamasi bo'lsa — server tuzgan tasdiq oynasi (modelga bog'liq emas) */
 function aiDeliver(chat, heard, ans, L) {
-  if (ans.draft) { if (heard) send(chat, heard.trim()); return send(chat, draftPreview(ans.draft), msgConfirmKb()); }
-  if (ans.msgPick) return send(chat, heard + '📩 Qaysi xodimga yuboray?', msgPickKb(ans.msgPick));
+  if (ans.draft) { if (heard) send(chat, heard.trim()); return send(chat, draftPreview(ans.draft), msgConfirmKb(ans.draft.id)); }
+  if (ans.msgPick) return send(chat, heard + '📩 Qaysi xodimga yuboray?', msgPickKb(ans.msgPick.list, ans.msgPick.tid));
   return send(chat, heard + esc(ans.text), aiCandidatesKb(ans.candidates) || mainMenu(L));
 }
 function aiCandidatesKb(c) {
@@ -1887,20 +1999,20 @@ function aiPick(uid, chat, q, L) {
   }
 }
 /** «X ga xabar yubor: matn» — modelsiz, to'g'ridan-to'g'ri (admin). Mos kelmasa null. */
-var MSG_INTENT = /^(.+?)\s*(?:ga|га|ге|ka|qa)?\s+(?:xabar|хабар|сообщение)\s+(?:yubor(?:ing)?|юбор(?:инг)?|jo['ʼ’]?nat(?:ing)?|жў?нат(?:инг)?|отправ(?:ь|ить|ьте)|напиши(?:те)?)\s*[:\-—,]\s*(.+)$/i;
-var MSG_INTENT_RU = /^(?:отправ(?:ь|ить|ьте)|напиши(?:те)?|пошли)\s+(?:сообщение\s+)?(.+?)\s*[:\-—]\s*(.+)$/i;
+var MSG_INTENT = /^(.+?)\s*(?:ga|га|ге|ka|qa)?\s+(?:xabar|хабар|сообщение)\s+(?:yubor(?:ing)?|юбор(?:инг)?|jo['ʼ’]?nat(?:ing)?|жў?нат(?:инг)?|отправ(?:ь|ить|ьте)|напиши(?:те)?)\s*(?::|—|,|\s-\s)\s*(.+)$/i;
+var MSG_INTENT_RU = /^(?:отправ(?:ь|ить|ьте)|напиши(?:те)?|пошли)\s+сообщение\s+(.+?)\s*(?::|—)\s*(.+)$/i; // «сообщение» so'zi shart — oddiy savollar xabar deb olinmaydi
 function tryDirectMessage(uid, chat, question) {
   if (String(uid) !== String(prop('ADMIN_ID'))) return null;
   var qn = String(question || '').trim(), m = qn.match(MSG_INTENT) || qn.match(MSG_INTENT_RU); if (!m) return null;
   var name = m[1].replace(/\s+(ga|га|ге)$/i, '').replace(/(ов|ев|ова|ева)(у|е|ой)$/i, '$1').trim(), txt = m[2].trim();
   if (!name || !txt) return null;
   var found = aiFindEmployees(name);
-  if (!found.length) return send(chat, '⚠️ «' + esc(name) + '» bo\'yicha xodim topilmadi.', mainMenu('uz'));
-  if (found.length > 1) { CacheService.getScriptCache().put('msgtext_' + uid, txt, 1800); return send(chat, '📩 Qaysi xodimga yuboray?', msgPickKb(found)); }
+  if (!found.length) return null; // topilmadi — AI yordamchi javob beradi (balki bu xabar buyrug'i emasdir)
+  if (found.length > 1) return send(chat, '📩 Qaysi xodimga yuboray?', msgPickKb(found, saveMsgText(uid, txt)));
   var d = makeDraft(uid, found[0].pinfl, txt);
   if (d.error) return send(chat, '⚠️ ' + esc(d.fio || name) + ' botda ro\'yxatdan o\'tmagan — xabar yuborib bo\'lmaydi.', mainMenu('uz'));
   logAction(uid, d.pinfl, 'msg_draft_direct');
-  return send(chat, draftPreview(d), msgConfirmKb());
+  return send(chat, draftPreview(d), msgConfirmKb(d.id));
 }
 /** handleMessage dan chaqiriladi: matn yoki ovoz → javob */
 function aiHandle(uid, chat, m, text, L, mgrName) {
